@@ -1,0 +1,5 @@
+# tailscaled.service starts /usr/sbin/tailscaled, and RHEL 10's policy matches a /usr/sbin path as /usr/bin.
+/usr/bin/tailscaled	--	gen_context(system_u:object_r:tailscaled_exec_t,s0)
+/var/lib/private/tailscale(/.*)?	gen_context(system_u:object_r:tailscaled_var_lib_t,s0)
+/var/cache/private/tailscale(/.*)?	gen_context(system_u:object_r:tailscaled_cache_t,s0)
+/run/tailscale(/.*)?	gen_context(system_u:object_r:tailscaled_runtime_t,s0)

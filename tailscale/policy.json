@@ -1,0 +1,25 @@
+{
+  "tagOwners": {
+    "tag:vm": [],
+    "tag:laptop": [],
+    "tag:operator": []
+  },
+  "grants": [
+    {
+      "src": ["*"],
+      "dst": ["tag:vm"],
+      "ip": ["tcp:443", "tcp:465", "tcp:993", "tcp:5432"]
+    },
+    {
+      "src": ["tag:operator"],
+      "dst": ["tag:laptop"],
+      "ip": ["tcp:22"]
+    },
+    {
+      "src": ["tag:operator"],
+      "dst": ["tag:vm"],
+      "ip": ["tcp:25"]
+    }
+  ],
+  "ssh": []
+}

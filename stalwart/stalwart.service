@@ -1,0 +1,17 @@
+[Unit]
+Description=Stalwart mail, calendar, and contacts server
+Requires=boot-root.service stalwart-apply.service
+After=boot-root.service stalwart-apply.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/run/stalwart/env
+ExecStart=/usr/bin/stalwart --config /etc/stalwart/config.json
+Restart=on-failure
+LimitNOFILE=65536
+
+IPAddressAllow=any
+
+[Install]
+WantedBy=multi-user.target

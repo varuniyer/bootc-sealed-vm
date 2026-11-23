@@ -1,0 +1,2 @@
+# EC2's serial console, which get-console-output reads, is the UART that the kernel names ttyS0.
+kargs = ["console=ttyS0"]

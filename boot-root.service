@@ -1,5 +1,5 @@
 [Unit]
-Description=Root-side boot configuration from instance metadata
+Description=Root-side boot configuration from Parameter Store
 Wants=network-online.target
 After=network-online.target
 
@@ -11,6 +11,10 @@ ExecStart=/opt/scripts/boot-root.sh
 RemainAfterExit=yes
 RuntimeDirectory=boot-postgresql
 RuntimeDirectoryMode=0750
+# The secret store, which holds what the inbox delivers (see boot-root.sh).
+StateDirectory=boot-root
+StateDirectoryMode=0700
 
-IPAddressAllow=169.254.169.254
-ReadWritePaths=/run/caddy /etc/webdav /etc/pki/containers
+IPAddressAllow=any
+ReadWritePaths=/run/caddy /run/stalwart /etc/pki/containers
+NoExecPaths=/run/boot-postgresql /run/caddy /run/stalwart /etc/pki/containers

@@ -1,0 +1,3 @@
+# RHEL's kernel builds heap zeroing off by default. Zeroing on allocation and on free keeps stale
+# data out of reused memory.
+kargs = ["init_on_alloc=1", "init_on_free=1"]

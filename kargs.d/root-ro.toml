@@ -1,0 +1,3 @@
+# The composefs root mounts read-only. The command line names no root, so systemd-gpt-auto-generator
+# finds it by partition type, and without ro it has systemd-remount-fs remount it read-write, which fails.
+kargs = ["ro"]

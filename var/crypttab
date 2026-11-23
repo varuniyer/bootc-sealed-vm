@@ -1,0 +1,2 @@
+# The NitroTPM holds the volume's only key, so headless=true makes an unlock it refuses fail at once.
+var /dev/disk/by-partlabel/var - tpm2-device=auto,headless=true

@@ -1,151 +1,369 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ZONE=us-central1-b
-REGION=${ZONE%-*}
-MACHINE_TYPE=c4a-standard-1
-DISK_SIZE=150GB
-DISK_TYPE=hyperdisk-balanced
+VM_INSTANCE_TYPE=m9g.medium
+VM_DISK_SIZE=150
+BUILD_INSTANCE_TYPE=m9g.large
+BUILD_FEDORA_RELEASE=45
 DOMAIN=varuniyer.net
 ACME_EMAIL=acme@varuniyer.net
-REDIR_LIST="varuniyer.info, varuniyer.me, www.varuniyer.net, www.varuniyer.info, www.varuniyer.me"
-MTA_STS_URL=https://mta-sts.forwardemail.net/.well-known/mta-sts.txt
-WEBDAV_USERNAME=dav
-GH_REPO=$(jq -r '.transports.docker | keys[0] | ltrimstr("ghcr.io/")' "$PWD/containers/policy.json")
-export GH_REPO
+WEBSITE_ALIAS_DOMAINS="varuniyer.info, varuniyer.me, www.varuniyer.net, www.varuniyer.info, www.varuniyer.me"
+MAIL_USER=varun
+MAIL_ALIAS_DOMAINS="varuniyer.info"
+TAILNET=tailbc280c.ts.net
+
+# provisioner.sh runs this script in the provisioner image, which supplies every tool it uses.
+[ -n "${PROVISIONER:-}" ] || \
+    exec "$PWD/provisioner.sh" "./${0##*/}" "$@"
 
 source "$PWD/build.env"
+source "$PWD/region.sh"
+source "$PWD/desec.sh"
 source "$PWD/tailscale/wireguard-port.env"
 
-# Secrets stay unexported shell variables and reach other processes only through
-# stdin or /dev/fd paths, never argv, the environment, or local disk.
-read_secret() { read -rsp "$1: " "$2"; echo >&2; }
+vm_name=bootc-vm
+# Only the first boot reads the Tailscale auth key and the PostgreSQL hash, so only the run that
+# creates the VM makes the key and asks for the PostgreSQL password.
+vm_instance_id=$(aws ec2 describe-instances --filters "Name=tag:Name,Values=$vm_name" Name=instance-state-name,Values=pending,running,stopping,stopped --query 'Reservations[].Instances[].InstanceId' --output text)
+if [ -z "$vm_instance_id" ]; then
+    read_secret 'PostgreSQL experiments password' POSTGRESQL_EXPERIMENTS_PASSWORD
+fi
+# A run against the existing VM reuses every value that still holds, so a rerun with unchanged
+# settings and secrets changes nothing. Parameters outlive the VM they were set for, and a new VM
+# starts without them.
+existing_parameters=$(aws ssm get-parameters-by-path --path "$VM_PARAMETERS" --with-decryption --query 'Parameters[].{key: Name, value: Value}' | \
+    jq -c --arg path "$VM_PARAMETERS" 'map({(.key | ltrimstr($path)): .value}) | add // {}')
+if [ -z "$vm_instance_id" ] && [ "$existing_parameters" != '{}' ]; then
+    jq -r --arg path "$VM_PARAMETERS" 'keys[] | $path + .' <<< "$existing_parameters" | xargs -n 10 aws ssm delete-parameters --names >/dev/null
+    existing_parameters='{}'
+fi
+read_existing() { printf '%s' "$existing_parameters" | jq -r --arg key "$1" '.[$key] // empty'; }
+# The inbox carries each secret the VM lacks the current value of, and boot-root.sh stores what it
+# carries on /var. It starts from any inbox a stopped run left in Parameter Store, so that run's
+# secrets still reach the VM.
+inbox=$(read_existing inbox)
+[ -n "$inbox" ] || \
+    inbox='{}'
+# inbox_add prints the inbox with the secret on its stdin added under key $1. The inbox reaches jq
+# through /dev/fd, so both stay outside argv.
+inbox_add() { jq -Rsc --arg key "$1" --slurpfile inbox <(printf '%s' "$inbox") '$inbox[0] + {($key): .}'; }
+read_secret "Mail password for $MAIL_USER@$DOMAIN" MAIL_PASSWORD
+read_secret "Relay password of the Forward Email alias $MAIL_USER@$DOMAIN" RELAY_PASSWORD
+desec_create_token provision
 
-# The daily build picks up package updates.
-# The website repo's publish workflow dispatches the same build with the same PAT.
-build_job=bootc-build
-workflow=build-and-publish.yml
-gcloud scheduler jobs describe "$build_job" --location="$REGION" >/dev/null 2>&1 || {
-    read_secret 'GitHub PAT with Actions read/write on this repo' GH_WORKFLOW_TOKEN
-    CLOUDSDK_CORE_DISABLE_FILE_LOGGING=1 gcloud scheduler jobs create http "$build_job" \
-        --location="$REGION" \
-        --schedule='0 0 * * *' \
-        --uri="https://api.github.com/repos/$GH_REPO/actions/workflows/$workflow/dispatches" \
-        --http-method=post \
-        --flags-file=<(printf -- '--headers: "Authorization=Bearer %s,Accept=application/vnd.github+json"\n' "$GH_WORKFLOW_TOKEN") \
-        --message-body='{"ref":"main"}' \
-        --max-retry-attempts=5 \
-        --attempt-deadline=120s
-    printf '%s' "$GH_WORKFLOW_TOKEN" | gh secret set GH_WORKFLOW_TOKEN --repo "$WEBSITE_REPO"
+# Stalwart stores a bcrypt hash as given, so only the hash after htpasswd's "user:" prefix reaches
+# the VM. bcrypt salts every hash, so the run hashes the password only when the existing VM's Stalwart
+# rejects it. The JMAP session endpoint answers only a signed-in client.
+if [ -z "$vm_instance_id" ] || ! printf '%s:%s' "$MAIL_USER" "$MAIL_PASSWORD" | jq -Rrs '"user = " + @json' | \
+        curl -sfL --max-time 30 -o /dev/null -K - "https://$REPOSITORY.$TAILNET/.well-known/jmap"; then
+    inbox=$(printf '%s' "$MAIL_PASSWORD" | htpasswd -niBC 12 "$MAIL_USER" | cut -d: -f2- | tr -d '\n' | inbox_add mail-password-hash)
+fi
+
+# /var's TPM policy admits each PCR 11 policy the PCR key signs. KMS makes each key and keeps its
+# private half, so a build can sign only while it runs.
+create_key_if_missing() {
+    local key
+    aws kms describe-key --key-id "$1" >/dev/null 2>&1 || \
+        {
+            key=$(aws kms create-key \
+                --key-spec "$2" \
+                --key-usage SIGN_VERIFY \
+                --description "$3" \
+                --query KeyMetadata.KeyId --output text)
+            aws kms create-alias \
+                --alias-name "$1" \
+                --target-key-id "$key"
+        }
+}
+create_key_if_missing "$SECUREBOOT_KEY" RSA_2048 'Signs systemd-boot and each UKI for Secure Boot'
+create_key_if_missing "$PCR_KEY" RSA_2048 'Signs the PCR 11 policy of each UKI'
+create_key_if_missing "$IMAGE_KEY" ECC_NIST_P256 'Signs each published image'
+fetch_public_key() { aws kms get-public-key --key-id "$1" --query PublicKey --output text | base64 -d | openssl pkey -pubin -inform DER; }
+image_public_key=$(fetch_public_key "$IMAGE_KEY")
+
+# Each build instance boots the newest Fedora cloud image of this release, which the launch template
+# reads from this parameter. EC2 checks the parameter when the stack creates the launch template.
+# Fedora publishes its images from this account.
+build_image_id=$(aws ec2 describe-images --owners 125523088429 --filters "Name=name,Values=Fedora-Cloud-Base-AmazonEC2.aarch64-$BUILD_FEDORA_RELEASE-*" --query 'sort_by(Images, &CreationDate)[-1].ImageId' --output text)
+existing_build_image_id=$(aws ssm get-parameters --names "${BUILD_PARAMETERS}build-image-id" --query 'Parameters[].Value' --output text)
+[ "$build_image_id" = "$existing_build_image_id" ] || \
+    aws ssm put-parameter --name "${BUILD_PARAMETERS}build-image-id" --type String --data-type aws:ec2:image --overwrite --value "$build_image_id" >/dev/null
+
+# reserve-address.sh allocates the address, which outlives the VM and the stack, so DNS keeps
+# pointing at reprovisioned VMs and the address keeps its reverse DNS record.
+address_name=bootc-ip
+address_allocation=$(aws ec2 describe-addresses --filters "Name=tag:Name,Values=$address_name" --query 'Addresses[].AllocationId' --output text)
+if [ -z "$address_allocation" ]; then
+    echo "No Elastic IP address is named $address_name. Run reserve-address.sh first (see README)." >&2
+    exit 1
+fi
+
+# infrastructure.yaml holds the other AWS resources that outlive the VM, and a deploy changes only
+# the resources whose definitions changed. The VM's network interface lives in the default subnet
+# of the first zone that offers the instance type.
+zones=$(aws ec2 describe-instance-type-offerings --location-type availability-zone --filters "Name=instance-type,Values=$VM_INSTANCE_TYPE" --query 'InstanceTypeOfferings[].Location' --output text | tr '\t' ,)
+subnet=$(aws ec2 describe-subnets --filters Name=default-for-az,Values=true "Name=availability-zone,Values=$zones" --query 'sort_by(Subnets, &AvailabilityZone)[0].SubnetId' --output text)
+stack=bootc
+aws cloudformation deploy --stack-name "$stack" --template-file infrastructure.yaml --capabilities CAPABILITY_NAMED_IAM --no-fail-on-empty-changeset --parameter-overrides \
+    "Repository=$REPOSITORY" "SecurebootKey=$SECUREBOOT_KEY" "PcrKey=$PCR_KEY" "ImageKey=$IMAGE_KEY" "BuildSecret=$BUILD_SECRET" "EntitlementCertificateSecret=$ENTITLEMENT_CERTIFICATE_SECRET" "BuildParameters=$BUILD_PARAMETERS" "VmParameters=$VM_PARAMETERS" "BuildInstanceType=$BUILD_INSTANCE_TYPE" "BuildInstanceName=$BUILD_INSTANCE_NAME" "BuildLog=$BUILD_LOG" "Subnet=$subnet" "AddressAllocation=$address_allocation" "WireguardPort=$WIREGUARD_PORT"
+fetch_stack_output() { aws cloudformation describe-stacks --stack-name "$stack" --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" --output text; }
+fetch_build_parameter_name() { aws ssm get-parameters --names "$BUILD_PARAMETERS$1" --query 'Parameters[].Name' --output text; }
+
+# Each build instance applies tailscale/policy.json through a Tailscale federated credential, which
+# trusts only the tokens AWS signs for its role. The client ID and audience are public, so both are
+# String parameters. A credential that a failed run left without its parameter is deleted first.
+federated_credential_description='bootc-build instance role'
+tailscale_policy_client_id_listed=$(fetch_build_parameter_name tailscale-policy-client-id)
+this_machine=$(fetch_this_machine)
+operator_tag_missing=$(printf '%s' "$this_machine" | jq .operator_tag_missing)
+if [ -z "$tailscale_policy_client_id_listed" ] || [ "$operator_tag_missing" = true ] || [ -z "$vm_instance_id" ]; then
+    read_secret 'Tailscale API access token' TAILSCALE_API_TOKEN
+fi
+tailscale_api_base=https://api.tailscale.com/api/v2
+# The API access token reaches curl through a /dev/fd header file.
+call_tailscale_api() { curl -sS --fail-with-body -H @<(printf 'Authorization: Bearer %s' "$TAILSCALE_API_TOKEN") "$@"; }
+[ -n "$tailscale_policy_client_id_listed" ] || \
+    {
+        stale_federated_credentials=$(call_tailscale_api "$tailscale_api_base/tailnet/-/keys?all=true" | \
+            jq -r --arg description "$federated_credential_description" '.keys[] | select(.keyType == "federated" and .description == $description) | .id')
+        for stale_federated_credential in $stale_federated_credentials; do
+            call_tailscale_api -X DELETE "$tailscale_api_base/tailnet/-/keys/$stale_federated_credential" >/dev/null
+        done
+        # AWS signs the tokens only once the account's outbound identity federation is on.
+        issuer=$(aws iam get-outbound-web-identity-federation-info --query IssuerIdentifier --output text 2>/dev/null) || \
+            issuer=$(aws iam enable-outbound-web-identity-federation --query IssuerIdentifier --output text)
+        build_role_arn=$(fetch_stack_output BuildRoleArn)
+        federated_credential=$(jq -n --arg description "$federated_credential_description" --arg issuer "$issuer" --arg subject "$build_role_arn" '{keyType: "federated", $description, scopes: ["policy_file", "devices:core:read", "devices:posture_attributes"], $issuer, $subject}' | \
+            call_tailscale_api -H 'Content-Type: application/json' --data @- "$tailscale_api_base/tailnet/-/keys")
+        tailscale_policy_audience=$(printf '%s' "$federated_credential" | jq -er '.audience // "api.tailscale.com/\(.id)"')
+        tailscale_policy_client_id=$(printf '%s' "$federated_credential" | jq -er .id)
+        aws ssm put-parameter --name "${BUILD_PARAMETERS}tailscale-policy-audience" --type String --overwrite --value "$tailscale_policy_audience" >/dev/null
+        aws ssm put-parameter --name "${BUILD_PARAMETERS}tailscale-policy-client-id" --type String --value "$tailscale_policy_client_id" >/dev/null
+    }
+
+# publish-tlsa.sh runs here and reaches the VM's tailnet port 25 as tag:operator. A device can take
+# the tag only once the tailnet's policy names it in tagOwners, and the build instances apply the
+# policy only from the first build on, so this run applies it first.
+if [ "$operator_tag_missing" = true ]; then
+    call_tailscale_api -H 'Content-Type: application/json' --data-binary @tailscale/policy.json "$tailscale_api_base/tailnet/-/acl" >/dev/null
+    device_id=$(printf '%s' "$this_machine" | jq -r .id)
+    printf '%s' "$this_machine" | jq -c '{tags: (.tags + ["tag:operator"])}' | \
+        call_tailscale_api -H 'Content-Type: application/json' --data @- "$tailscale_api_base/device/$device_id/tags" >/dev/null
+fi
+
+fetch_seed_image() { aws ec2 describe-images --owners self --filters "Name=name,Values=$SEED_IMAGE" --query "Images[].$1" --output text; }
+# The firmware matches the certificate itself, so it only has to carry the Secure Boot key's public
+# half, and openssl signs it with a key this run makes and discards. A seed image built under an
+# earlier certificate would give a new VM firmware that rejects the new signatures.
+secureboot_certificate_listed=$(fetch_build_parameter_name secureboot-certificate)
+[ -n "$secureboot_certificate_listed" ] || \
+    {
+        secureboot_public_key=$(fetch_public_key "$SECUREBOOT_KEY")
+        secureboot_certificate=$(openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 2>/dev/null | \
+            openssl x509 -new -force_pubkey <(printf '%s' "$secureboot_public_key") -key /dev/stdin -subj "/CN=$REPOSITORY Secure Boot" -days 36500 2>/dev/null)
+        stale_seed_image_id=$(fetch_seed_image ImageId)
+        [ -z "$stale_seed_image_id" ] || \
+            aws ec2 deregister-image --image-id "$stale_seed_image_id" --delete-associated-snapshots >/dev/null
+        aws ssm put-parameter --name "${BUILD_PARAMETERS}secureboot-certificate" --type String --value "$secureboot_certificate" >/dev/null
+    }
+
+# The build clones main from CodeCommit, so the first run pushes this checkout's main there, and the
+# push starts a build. A run that finds the branch and no seed image starts one here.
+seed_image_state=$(fetch_seed_image State)
+main_branch_listed=$(aws codecommit get-branch --repository-name "$REPOSITORY" --branch-name main --query branch.branchName --output text 2>/dev/null) || \
+    {
+        source_clone_url=$(fetch_stack_output SourceCloneUrl)
+        git -c credential.helper='!aws codecommit credential-helper $@' -c credential.UseHttpPath=true push "$source_clone_url" main
+    }
+[ -z "$main_branch_listed" ] || [ -n "$seed_image_state" ] || \
+    {
+        build_start_arn=$(fetch_stack_output BuildStartArn)
+        aws stepfunctions start-execution --state-machine-arn "$build_start_arn" >/dev/null
+    }
+# EC2 creates an instance only from an available image. A build that ends without one has failed.
+until [ "$seed_image_state" = available ]; do
+    sleep 60
+    seed_image_state=$(fetch_seed_image State)
+    build_instances=$(aws ec2 describe-instances --filters "Name=tag:Name,Values=$BUILD_INSTANCE_NAME" Name=instance-state-name,Values=pending,running --query 'Reservations[].Instances[].InstanceId' --output text)
+    if [ -z "$seed_image_state" ] && [ -z "$build_instances" ]; then
+        account_id=$(aws sts get-caller-identity --query Account --output text)
+        echo "The build ended without a seed image. Read its log in s3://bootc-build-logs-$account_id/$BUILD_LOG." >&2
+        exit 1
+    fi
+done
+
+# Stalwart logs in to Forward Email's relay with this password. The VM cannot show which password it
+# holds, so Parameter Store records the SHA-256 of the one it was sent, as it records the public
+# halves of the keys.
+relay_password_sha256=$(printf '%s' "$RELAY_PASSWORD" | sha256sum | head -c 64)
+existing_relay_password_sha256=$(read_existing relay-password-sha256)
+[ "$relay_password_sha256" = "$existing_relay_password_sha256" ] || \
+    inbox=$(printf '%s' "$RELAY_PASSWORD" | inbox_add relay-password)
+
+# Stalwart signs Web Push notifications with this Web Push key, and clients' push subscriptions name
+# its public half, so the VM keeps its key while Parameter Store records the public half. openssl
+# writes each new key only to stdout.
+web_push_public_key=$(read_existing web-push-public-key)
+[ -n "$web_push_public_key" ] || \
+    {
+        web_push_key=$(openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 2>/dev/null)
+        web_push_public_key=$(printf '%s' "$web_push_key" | openssl pkey -pubout)
+        inbox=$(printf '%s' "$web_push_key" | inbox_add web-push-key)
+    }
+
+# Senders fetch the policy again whenever the _mta-sts TXT id changes, so the id hashes the policy.
+printf -v mta_sts_policy 'version: STSv1\nmode: enforce\nmx: mail.%s\nmax_age: 604800\n' "$DOMAIN"
+mta_sts_id=$(printf '%s' "$mta_sts_policy" | sha256sum | head -c 20)
+
+ip=$(aws ec2 describe-addresses --allocation-ids "$address_allocation" --query 'Addresses[0].PublicIp' --output text)
+
+# queue_rrset queues an RRset for its zone's one PATCH (see desec_apply): a name, a type, and the
+# records as a JSON array. queue_zone_rrset takes the name's zone first, from a caller that holds it.
+declare -A zone_rrsets
+queue_zone_rrset() {
+    local subname
+    subname=$(desec_subname "$2" "$1")
+    zone_rrsets[$1]+=$(desec_rrset "$subname" "$3" "$4")$'\n'
+}
+queue_rrset() {
+    local zone
+    zone=$(desec_fetch_zone "$1")
+    queue_zone_rrset "$zone" "$@"
+}
+# An apex TXT set also holds other services' verification values, so only its SPF value changes.
+queue_spf() {
+    local zone subname records
+    zone=$(desec_fetch_zone "$1")
+    subname=$(desec_subname "$1" "$zone")
+    records=$(call_desec "$desec_api/domains/$zone/rrsets/?subname=$subname&type=TXT" | \
+        jq -c --arg spf "\"$2\"" '[(.[0].records // [])[] | select(startswith("\"v=spf1") | not)] + [$spf]')
+    queue_zone_rrset "$zone" "$1" TXT "$records"
 }
 
-read_secret 'Tailscale OAuth client secret' TS_OAUTH_SECRET
-read_secret 'PostgreSQL experiments password' POSTGRESQL_EXPERIMENTS_PASSWORD
-read_secret "WebDAV password for $WEBDAV_USERNAME" WEBDAV_PASSWORD
+# Stalwart signs each message the mailbox sends with this DKIM key before the relay takes it. Receivers
+# check the signature against the key's public half in DNS, which Parameter Store records as it does
+# the Web Push key's.
+dkim_selector=bootc
+dkim_public_key=$(read_existing dkim-public-key)
+[ -n "$dkim_public_key" ] || \
+    {
+        dkim_key=$(openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 2>/dev/null)
+        dkim_public_key=$(printf '%s' "$dkim_key" | openssl pkey -pubout -outform DER | base64 -w0)
+        inbox=$(printf '%s' "$dkim_key" | inbox_add dkim-key)
+    }
+# One TXT string holds at most 255 characters, and the record exceeds that.
+dkim_records=$(jq -nc --arg record "v=DKIM1; k=rsa; p=$dkim_public_key" '[[$record | scan(".{1,255}") | "\"\(.)\""] | join(" ")]')
+queue_rrset "$dkim_selector._domainkey.$DOMAIN" TXT "$dkim_records"
+# Forward Email's servers deliver the domain's mail, so the SPF value names them alone.
+queue_spf "$DOMAIN" 'v=spf1 include:spf.forwardemail.net -all'
+mail_alias_domains=(${MAIL_ALIAS_DOMAINS//,/ })
+mail_domains=("$DOMAIN" "${mail_alias_domains[@]}")
+for mail_domain in "${mail_domains[@]}"; do
+    queue_rrset "$mail_domain" MX "[\"10 mail.$DOMAIN.\"]"
+done
+for mail_alias_domain in "${mail_alias_domains[@]}"; do
+    queue_spf "$mail_alias_domain" 'v=spf1 -all'
+done
 
-# --network=none confines each plaintext secret to the container that handles it.
-postgresql_experiments_hash=$(printf '%s' "$POSTGRESQL_EXPERIMENTS_PASSWORD" | podman run --rm -i --log-driver=none --network=none --tmpfs /tmp --user postgres -v "$PWD/hash-postgresql-password:/hash-postgresql-password:Z,ro" \
-    docker.io/library/postgres:17-alpine /bin/sh /hash-postgresql-password/run.sh)
-webdav_htpasswd=$(printf '%s' "$WEBDAV_PASSWORD" | podman run --rm -i --log-driver=none --network=none \
-    docker.io/library/httpd:alpine htpasswd -niB "$WEBDAV_USERNAME")
-
-# CI reaches GCP through Workload Identity Federation with short-lived tokens. Only
-# main-branch runs of this repo can act as the service account, which writes the seed bucket and image.
-project=$(gcloud config get-value project)
-pool_id=github
-provider_id=${GH_REPO#*/}
-role_id=bootcImages
-pool=projects/$(gcloud projects describe "$project" --format='value(projectNumber)')/locations/global/workloadIdentityPools/$pool_id
-service_account=bootc-ci@$project.iam.gserviceaccount.com
-gcloud iam workload-identity-pools describe "$pool_id" --location=global >/dev/null 2>&1 || \
-    gcloud iam workload-identity-pools create "$pool_id" \
-        --location=global
-gcloud iam workload-identity-pools providers describe "$provider_id" --location=global --workload-identity-pool="$pool_id" >/dev/null 2>&1 || \
-    gcloud iam workload-identity-pools providers create-oidc "$provider_id" \
-        --location=global \
-        --workload-identity-pool="$pool_id" \
-        --issuer-uri=https://token.actions.githubusercontent.com \
-        --attribute-mapping=google.subject=assertion.sub \
-        --attribute-condition="assertion.repository=='$GH_REPO'"
-gcloud iam service-accounts describe "$service_account" >/dev/null 2>&1 || \
-    gcloud iam service-accounts create "${service_account%%@*}"
-gcloud iam roles describe "$role_id" --project="$project" >/dev/null 2>&1 || \
-    gcloud iam roles create "$role_id" \
-        --project="$project" \
-        --permissions=compute.images.create,compute.images.delete,compute.images.get,compute.globalOperations.get
-gcloud storage buckets describe "gs://$SEED_BUCKET" >/dev/null 2>&1 || \
-    gcloud storage buckets create "gs://$SEED_BUCKET" \
-        --location="$REGION" \
-        --uniform-bucket-level-access
-gcloud storage buckets add-iam-policy-binding "gs://$SEED_BUCKET" --member="serviceAccount:$service_account" --role=roles/storage.objectAdmin >/dev/null
-gcloud projects add-iam-policy-binding "$project" --member="serviceAccount:$service_account" --role="projects/$project/roles/$role_id" --condition=None >/dev/null
-# GitHub's sub claim can carry the owner and repository IDs, so GitHub supplies its prefix.
-sub_claim_prefix=$(gh api "repos/$GH_REPO/actions/oidc/customization/sub" --jq .sub_claim_prefix)
-gcloud iam service-accounts add-iam-policy-binding "$service_account" --role=roles/iam.workloadIdentityUser \
-    --member="principal://iam.googleapis.com/$pool/subject/$sub_claim_prefix:ref:refs/heads/main" >/dev/null
-printf '%s' "$pool/providers/$provider_id" | gh variable set GCP_WORKLOAD_IDENTITY_PROVIDER
-printf '%s' "$service_account" | gh variable set GCP_SERVICE_ACCOUNT
-
-# Actions secrets are write-only, so the public key goes in a variable that gh can read back.
-public_key_var=SIGSTORE_PUBLIC_KEY
-listed_public_key_var=$(gh variable list --json name --jq ".[].name | select(. == \"$public_key_var\")")
-if [ -z "$listed_public_key_var" ]; then
-    passphrase=$(head -c 32 /dev/urandom | base64)
-    keys=$(printf '%s\n' "$passphrase" | podman run --rm -i --log-driver=none --network=none --tmpfs /tmp --entrypoint sh quay.io/skopeo/stable:latest \
-        -c 'skopeo generate-sigstore-key --output-prefix /tmp/k --passphrase-file /dev/stdin >&2 && cat /tmp/k.pub /tmp/k.private')
-    printf '%s\n' "$keys" | sed '1,/END PUBLIC KEY/d' | gh secret set SIGSTORE_PRIVATE_KEY
-    printf '%s' "$passphrase" | gh secret set SIGSTORE_PASSPHRASE
-    printf '%s\n' "$keys" | sed '/END PUBLIC KEY/q' | gh variable set "$public_key_var"
+# The A records point every served name at the address before Caddy's and Stalwart's first
+# certificate requests. The CAA records admit only Let's Encrypt, through the HTTP-01 and
+# TLS-ALPN-01 challenges that Caddy and Stalwart answer.
+website_alias_domains=(${WEBSITE_ALIAS_DOMAINS//,/ })
+for name in "$DOMAIN" "mail.$DOMAIN" "mta-sts.$DOMAIN" "${website_alias_domains[@]}"; do
+    queue_rrset "$name" A "[\"$ip\"]"
+    queue_rrset "$name" CAA '["0 issue \"letsencrypt.org; validationmethods=http-01,tls-alpn-01\""]'
+done
+# A website alias domain that receives no mail refuses it with a null MX and forbids sending as it.
+for name in "${website_alias_domains[@]}"; do
+    [[ " ${mail_domains[*]} " == *" $name "* ]] && continue
+    queue_rrset "$name" MX '["0 ."]'
+    queue_spf "$name" 'v=spf1 -all'
+done
+queue_rrset "_mta-sts.$DOMAIN" TXT "[\"\\\"v=STSv1; id=$mta_sts_id\\\"\"]"
+# A new VM's Stalwart generates a new key, so the TLSA record that pinned the old one goes away until
+# publish-tlsa.sh pins the new one. An existing VM keeps its key across runs.
+if [ -z "$vm_instance_id" ]; then
+    queue_rrset "_25._tcp.mail.$DOMAIN" TLSA '[]'
 fi
-sigstore_public_key=$(gh variable get "$public_key_var")
+for zone in "${!zone_rrsets[@]}"; do
+    rrsets=$(printf '%s' "${zone_rrsets[$zone]}" | jq -sc .)
+    desec_apply "$zone" "$rrsets"
+done
 
-# CI pulls the Red Hat base image with a registry service account.
-registry_token_secret=REDHAT_REGISTRY_TOKEN
-listed_registry_token_secret=$(gh secret list --json name --jq ".[].name | select(. == \"$registry_token_secret\")")
-if [ -z "$listed_registry_token_secret" ]; then
-    read -rp 'Red Hat registry service account username: ' REDHAT_REGISTRY_USERNAME
-    read_secret 'Red Hat registry token' REDHAT_REGISTRY_TOKEN
-    printf '%s' "$REDHAT_REGISTRY_USERNAME" | gh variable set REDHAT_REGISTRY_USERNAME
-    printf '%s' "$REDHAT_REGISTRY_TOKEN" | gh secret set "$registry_token_secret"
+# Every boot reads the settings, and the public halves name the keys the VM holds. A parameter is
+# written only when it holds another value.
+parameters_changed=
+set_parameter() {
+    jq -e --arg key "$1" --rawfile value <(printf '%s' "$3") '.[$key] == $value' <<< "$existing_parameters" >/dev/null && return
+    aws ssm put-parameter --name "$VM_PARAMETERS$1" --type "$2" --overwrite --value "file://"<(printf '%s' "$3") >/dev/null
+    parameters_changed=1
+}
+set_parameter acme-email String "$ACME_EMAIL"
+set_parameter domain String "$DOMAIN"
+set_parameter website-alias-domains String "$WEBSITE_ALIAS_DOMAINS"
+set_parameter mta-sts-policy String "$mta_sts_policy"
+set_parameter image-public-key String "$image_public_key"
+set_parameter mail-user String "$MAIL_USER"
+set_parameter mail-alias-domains String "$MAIL_ALIAS_DOMAINS"
+set_parameter tailnet String "$TAILNET"
+set_parameter dkim-selector String "$dkim_selector"
+set_parameter dkim-public-key String "$dkim_public_key"
+set_parameter web-push-public-key String "$web_push_public_key"
+[ "$inbox" = '{}' ] || \
+    set_parameter inbox SecureString "$inbox"
+# The hash follows the inbox, so a run that stops between the two writes sends the password again.
+set_parameter relay-password-sha256 String "$relay_password_sha256"
+if [ -n "$vm_instance_id" ]; then
+    # The VM reads its parameters at boot, so it boots again when a value changed. It also boots
+    # again while the inbox holds secrets, because remove-boot-secrets.sh removes the inbox once any
+    # boot finished, and only a boot after this run's write has stored this inbox.
+    if [ -n "$parameters_changed" ] || [ "$inbox" != '{}' ]; then
+        aws ec2 reboot-instances --instance-ids "$vm_instance_id"
+    fi
+else
+    # The provisioner's PostgreSQL hashes the password, which it reads from stdin, and the AWS CLI
+    # reads the hash from the pipe on /dev/fd/0. initdb refuses to run as root, so the hasher runs
+    # as postgres.
+    printf '%s' "$POSTGRESQL_EXPERIMENTS_PASSWORD" | runuser -u postgres -- /hash-postgresql-password/run.sh | tr -d '\n' | \
+        aws ssm put-parameter --name "${VM_PARAMETERS}postgresql-experiments-hash" --type SecureString --value file:///dev/fd/0 >/dev/null
+    # The first boot logs in with this key, and every later boot reuses the node key in tailscaled's
+    # state on /var. A tagged node's key never expires, so the auth key needs to outlive only the
+    # first boot, and a non-ephemeral node stays registered while the VM reboots.
+    tailscale_auth_key=$(jq -n '{capabilities: {devices: {create: {reusable: false, ephemeral: false, preauthorized: true, tags: ["tag:vm"]}}}, expirySeconds: 3600, description: "bootc-vm first boot"}' | \
+        call_tailscale_api -H 'Content-Type: application/json' --data @- "$tailscale_api_base/tailnet/-/keys" | jq -er .key)
+    # Under Tailnet Lock, the VM signs its own node key with a credential that this machine's lock key
+    # wraps into the auth key, so the coordination server never picks the node key this machine trusts.
+    # The end of the run retires the auth key's credential.
+    lock_enabled=$(tailscale lock status --json | jq .Enabled)
+    if [ "$lock_enabled" = true ]; then
+        tailscale_auth_key=$(tailscale lock sign file:<(printf '%s' "$tailscale_auth_key"))
+    fi
+    set_parameter tailscale-auth-key SecureString "$tailscale_auth_key"
+    # The firmware keys come from the seed image, and the role lets the VM read its parameters and
+    # pull its image. A hop limit of 1 keeps the role's credentials from anything behind a NAT.
+    seed_image_id=$(fetch_seed_image ImageId)
+    vm_interface=$(fetch_stack_output VmInterface)
+    aws ec2 run-instances --image-id "$seed_image_id" --instance-type "$VM_INSTANCE_TYPE" --network-interfaces "NetworkInterfaceId=$vm_interface,DeviceIndex=0" --iam-instance-profile Name=bootc-vm \
+        --block-device-mappings "DeviceName=/dev/sda1,Ebs={VolumeSize=$VM_DISK_SIZE,VolumeType=gp3}" --metadata-options HttpTokens=required,HttpPutResponseHopLimit=1 --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=$vm_name}]" >/dev/null
 fi
 
-# A new key needs a signed build, and a fresh project needs its first seed image.
-[ -n "$listed_public_key_var" ] && gcloud compute images describe "$SEED_IMAGE" >/dev/null 2>&1 || gh workflow run "$workflow" --ref main
-# A new image exists while still PENDING, and instance creation accepts only a READY one.
-until [ "$(gcloud compute images describe "$SEED_IMAGE" --format='value(status)' 2>/dev/null)" = READY ]; do sleep 60; done
+"$PWD/remove-boot-secrets.sh"
 
-mta_sts_txt=$(curl -sSf "$MTA_STS_URL")
-
-# The static address outlives the VM, so DNS keeps pointing at reprovisioned VMs.
-address=bootc-ip
-gcloud compute addresses describe "$address" --region="$REGION" >/dev/null 2>&1 || \
-    gcloud compute addresses create "$address" \
-        --region="$REGION"
-
-gcloud compute instances create bootc-server \
-    --zone="$ZONE" \
-    --machine-type="$MACHINE_TYPE" \
-    --image="$SEED_IMAGE" \
-    --boot-disk-size="$DISK_SIZE" \
-    --boot-disk-type="$DISK_TYPE" \
-    --address="$address" \
-    --shielded-secure-boot \
-    --shielded-vtpm \
-    --no-service-account \
-    --no-scopes \
-    --metadata "^|^acme-email=$ACME_EMAIL|domain=$DOMAIN|redir-list=$REDIR_LIST|mta-sts-txt=$mta_sts_txt|sigstore-public-key=$sigstore_public_key" \
-    --metadata-from-file=ts-oauth-secret=<(printf '%s' "$TS_OAUTH_SECRET"),postgresql-experiments-hash=<(printf '%s' "$postgresql_experiments_hash"),webdav-htpasswd=<(printf '%s' "$webdav_htpasswd")
-
-web_rule=allow-web
-gcloud compute firewall-rules describe "$web_rule" >/dev/null 2>&1 || \
-    gcloud compute firewall-rules create "$web_rule" \
-        --direction=INGRESS \
-        --allow=tcp:80,tcp:443
-
-# Tailscale peers reach the VM directly over this WireGuard port and otherwise relay
-# through DERP on outbound 443.
-wireguard_rule=allow-tailscale-wireguard
-gcloud compute firewall-rules describe "$wireguard_rule" >/dev/null 2>&1 || \
-    gcloud compute firewall-rules create "$wireguard_rule" \
-        --direction=INGRESS \
-        --allow=udp:$WIREGUARD_PORT
+# This machine signs the VM's node key under a rotation key whose private half no one keeps, so no one
+# can move the signature. Removing the auth key's credential re-signs nothing, since re-signing would
+# keep its key as the VM's rotation key. A terminal would make `lock remove` ask for confirmation.
+lock_status=$(tailscale lock status --json)
+vm_peer=$(printf '%s' "$lock_status" | jq -c --arg name "$REPOSITORY.$TAILNET." '[.VisiblePeers[]? | select(.DNSName == $name and .NodeKeySignature.Nested.SigKind? == "credential")][0] // empty')
+if [ -n "$vm_peer" ]; then
+    vm_node_key=$(printf '%s' "$vm_peer" | jq -er .NodeKey)
+    credential_key=$(printf '%s' "$vm_peer" | jq -er .NodeKeySignature.Nested.KeyID)
+    credential_nodes=$(printf '%s' "$lock_status" | jq --arg key "$credential_key" '[.VisiblePeers[] | select(.NodeKeySignature.Nested.KeyID? == $key)] | length')
+    rotation_key=$(openssl genpkey -algorithm ed25519 | openssl pkey -pubout -outform DER | tail -c 32 | od -An -tx1 -v | tr -d ' \n')
+    [ "$credential_nodes" != 1 ] || \
+        tailscale lock sign "$vm_node_key" "tlpub:$rotation_key"
+    tailscale lock remove --re-sign=false "$credential_key" >/dev/null
+    if [ "$credential_nodes" != 1 ]; then
+        echo "$credential_nodes nodes carried the VM auth key's credential, which is now removed. Check 'tailscale lock status' and sign the VM's node key." >&2
+        exit 1
+    fi
+fi

@@ -1,0 +1,3 @@
+# RHEL's policy labels the /usr/bin counterparts of these PGDG binaries postgresql_exec_t. This entry
+# gives them the same label, so postgres runs confined as postgresql_t.
+/usr/pgsql-17/bin/(postgres|initdb|pg_ctl)	--	gen_context(system_u:object_r:postgresql_exec_t,s0)

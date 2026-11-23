@@ -1,0 +1,16 @@
+[Unit]
+Description=Per-boot Stalwart settings from the rendered plan
+Requires=boot-root.service
+Wants=network-online.target
+After=boot-root.service network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/scripts/stalwart-apply.sh
+RemainAfterExit=yes
+TimeoutStartSec=600
+
+# The recovery listener binds [::]. Its port stays closed to the network because nftables
+# and the security group admit no inbound traffic to it.
+RestrictAddressFamilies=AF_INET6
+IPAddressAllow=any

@@ -1,3 +1,0 @@
-; RHEL's policy lets systemd enter postgresql_t only without NoNewPrivileges, which sandbox.conf sets.
-; Its rule for httpd_t already carries this permission.
-(allow init_t postgresql_t (process2 (nnp_transition)))

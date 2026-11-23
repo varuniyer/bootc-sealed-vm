@@ -1,0 +1,8 @@
+policy_module(postgresql_local, 1.0.0)
+
+gen_require(`
+	type postgresql_t;
+')
+
+# RHEL's policy lets systemd enter postgresql_t only without NoNewPrivileges, which sandbox.conf sets.
+init_nnp_daemon_domain(postgresql_t)

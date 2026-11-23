@@ -1,1 +1,4 @@
-LABEL=boot /boot ext4 defaults 1 1
+# mkfs leaves the new filesystem's root directory unlabeled, so SELinux denies writes to /var until
+# rootcontext labels it at mount, before any process can see it. Every program runs from the
+# read-only root, so no file on /var executes (see sandbox.conf for /tmp, /dev/shm, and /run).
+/dev/mapper/var /var ext4 defaults,nodev,nosuid,noexec,rootcontext=system_u:object_r:var_t:s0 0 2

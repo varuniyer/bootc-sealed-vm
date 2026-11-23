@@ -2,8 +2,8 @@
     "default": [{"type": "reject"}],
     "transports": {
         "docker": {
-            "ghcr.io/varuniyer/bootc-gce-server": [
-                {"type": "sigstoreSigned", "keyPath": "/etc/pki/containers/sigstore.pub"}
+            "*.dkr.ecr.us-east-2.amazonaws.com": [
+                {"type": "sigstoreSigned", "keyPath": "/etc/pki/containers/image.pub"}
             ]
         },
         "containers-storage": {

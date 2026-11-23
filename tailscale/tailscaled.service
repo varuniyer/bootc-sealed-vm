@@ -12,6 +12,7 @@ ExecStart=/usr/sbin/tailscaled --tun=userspace-networking --state=${STATE_DIRECT
 Restart=on-failure
 RuntimeDirectory=tailscale
 RuntimeDirectoryMode=0755
+NoExecPaths=/run/tailscale
 StateDirectory=tailscale
 StateDirectoryMode=0700
 CacheDirectory=tailscale

@@ -1,0 +1,66 @@
+policy_module(tailscaled, 1.0.0)
+
+type tailscaled_t;
+type tailscaled_exec_t;
+init_daemon_domain(tailscaled_t, tailscaled_exec_t)
+# sandbox.conf sets NoNewPrivileges, under which systemd enters a domain only with nnp_transition.
+init_nnp_daemon_domain(tailscaled_t)
+
+# The node key and state file.
+type tailscaled_var_lib_t;
+files_type(tailscaled_var_lib_t)
+type tailscaled_cache_t;
+files_type(tailscaled_cache_t)
+# The socket the tailscale CLI connects to.
+type tailscaled_runtime_t;
+files_pid_file(tailscaled_runtime_t)
+
+allow tailscaled_t self:tcp_socket create_stream_socket_perms;
+allow tailscaled_t self:udp_socket create_socket_perms;
+allow tailscaled_t self:unix_stream_socket create_stream_socket_perms;
+# tailscaled watches addresses and routes over netlink.
+allow tailscaled_t self:netlink_route_socket create_netlink_socket_perms;
+# Type=notify's readiness message goes over a datagram socket to systemd's notify socket, which
+# carries kernel_t.
+allow tailscaled_t self:unix_dgram_socket create_socket_perms;
+kernel_dgram_send(tailscaled_t)
+
+files_search_var_lib(tailscaled_t)
+manage_dirs_pattern(tailscaled_t, tailscaled_var_lib_t, tailscaled_var_lib_t)
+manage_files_pattern(tailscaled_t, tailscaled_var_lib_t, tailscaled_var_lib_t)
+manage_dirs_pattern(tailscaled_t, tailscaled_cache_t, tailscaled_cache_t)
+manage_files_pattern(tailscaled_t, tailscaled_cache_t, tailscaled_cache_t)
+files_search_pids(tailscaled_t)
+manage_dirs_pattern(tailscaled_t, tailscaled_runtime_t, tailscaled_runtime_t)
+manage_files_pattern(tailscaled_t, tailscaled_runtime_t, tailscaled_runtime_t)
+manage_sock_files_pattern(tailscaled_t, tailscaled_runtime_t, tailscaled_runtime_t)
+miscfiles_read_generic_certs(tailscaled_t)
+
+corenet_tcp_bind_generic_node(tailscaled_t)
+corenet_udp_bind_generic_node(tailscaled_t)
+# WireGuard binds wireguard-port.env's port, which carries no port type of its own.
+corenet_udp_bind_all_ports(tailscaled_t)
+# The control plane and DERP relays answer on 443, and tailnet peers on any port. tailscale serve
+# reaches PostgreSQL on 127.0.0.1:5432 and Stalwart on 127.0.0.1:9000, 143, 587, and 25.
+corenet_tcp_connect_all_ports(tailscaled_t)
+sysnet_dns_name_resolve(tailscaled_t)
+
+kernel_read_net_sysctls(tailscaled_t)
+kernel_read_system_state(tailscaled_t)
+kernel_read_network_state(tailscaled_t)
+dev_read_sysfs(tailscaled_t)
+dev_read_urand(tailscaled_t)
+fs_read_cgroup_files(tailscaled_t)
+auth_read_passwd(tailscaled_t)
+
+# tailscaled probes for loginctl and the D-Bus socket, and the sandbox gives it a use for neither.
+# It also watches /etc for another program replacing a resolv.conf it wrote, and it writes none,
+# because boot-tailscale.sh sets --accept-dns=false.
+gen_require(`
+	type bin_t;
+	type etc_t;
+	type system_dbusd_var_run_t;
+')
+dontaudit tailscaled_t bin_t:file { execute execute_no_trans map };
+dontaudit tailscaled_t etc_t:dir { watch watch_reads };
+dontaudit tailscaled_t system_dbusd_var_run_t:sock_file write;

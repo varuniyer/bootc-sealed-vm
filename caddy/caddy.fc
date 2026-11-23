@@ -1,0 +1,4 @@
+/usr/bin/caddy	--	gen_context(system_u:object_r:caddy_exec_t,s0)
+/etc/caddy(/.*)?	gen_context(system_u:object_r:caddy_etc_t,s0)
+/var/lib/caddy(/.*)?	gen_context(system_u:object_r:caddy_var_lib_t,s0)
+/run/caddy(/.*)?	gen_context(system_u:object_r:caddy_runtime_t,s0)

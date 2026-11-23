@@ -1,0 +1,389 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  The AWS resources that outlive the VM. provision.sh deploys this as the bootc stack and creates
+  the VM and its parameters itself, and entitlement.sh creates the build's secrets.
+
+Parameters:
+  Repository:
+    Type: String
+  SecurebootKey:
+    Type: String
+  PcrKey:
+    Type: String
+  ImageKey:
+    Type: String
+  BuildSecret:
+    Type: String
+  EntitlementCertificateSecret:
+    Type: String
+  BuildParameters:
+    Type: String
+  VmParameters:
+    Type: String
+  BuildInstanceType:
+    Type: String
+  BuildInstanceName:
+    Type: String
+  BuildLog:
+    Type: String
+  Subnet:
+    Type: AWS::EC2::Subnet::Id
+  AddressAllocation:
+    Type: String
+  WireguardPort:
+    Type: Number
+
+Resources:
+  SourceRepository:
+    Type: AWS::CodeCommit::Repository
+    Properties:
+      RepositoryName: !Ref Repository
+
+  # Each build replaces the latest tag, which leaves the last image untagged, and adds a signature
+  # tagged sha256-<digest>.sig.
+  ImageRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Ref Repository
+      EmptyOnDelete: true
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {"rules": [
+            {"rulePriority": 1, "selection": {"tagStatus": "untagged", "countType": "sinceImagePushed", "countUnit": "days", "countNumber": 1}, "action": {"type": "expire"}},
+            {"rulePriority": 2, "selection": {"tagStatus": "tagged", "tagPrefixList": ["sha256-"], "countType": "imageCountMoreThan", "countNumber": 2}, "action": {"type": "expire"}}
+          ]}
+
+  BuildLogBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub bootc-build-logs-${AWS::AccountId}
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  BuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: bootc-build
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: build
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: codecommit:GitPull
+                Resource: !GetAtt SourceRepository.Arn
+              - Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:BatchGetImage
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:InitiateLayerUpload
+                  - ecr:UploadLayerPart
+                  - ecr:CompleteLayerUpload
+                  - ecr:PutImage
+                Resource: !GetAtt ImageRepository.Arn
+              # provision.sh creates the three signing keys, and a key rotation moves an alias to a new key.
+              - Effect: Allow
+                Action:
+                  - kms:Sign
+                  - kms:GetPublicKey
+                Resource: !Sub arn:aws:kms:${AWS::Region}:${AWS::AccountId}:key/*
+                Condition:
+                  ForAnyValue:StringEquals:
+                    kms:ResourceAliases:
+                      - !Ref SecurebootKey
+                      - !Ref PcrKey
+                      - !Ref ImageKey
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource:
+                  - !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${BuildSecret}-??????
+                  - !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${EntitlementCertificateSecret}-??????
+              - Effect: Allow
+                Action: ssm:GetParameter
+                Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${BuildParameters}*
+              - Effect: Allow
+                Action: s3:PutObject
+                Resource: !Sub ${BuildLogBucket.Arn}/${BuildLog}
+              # tailscale/apply-policy.sh trades this token for a Tailscale API token.
+              - Effect: Allow
+                Action: sts:GetWebIdentityToken
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - ec2:DescribeInstances
+                  - ec2:DescribeVolumes
+                  - ec2:DescribeImages
+                  - ec2:DescribeSnapshots
+                  - ec2:CreateSnapshot
+                  - ec2:DeleteSnapshot
+                  - ec2:RegisterImage
+                  - ec2:DeregisterImage
+                Resource: '*'
+              - Effect: Allow
+                Action: ec2:TerminateInstances
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    ec2:ResourceTag/Name: !Ref BuildInstanceName
+  BuildInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: bootc-build
+      Roles:
+        - !Ref BuildRole
+
+  # Each build runs on its own instance, which Fedora's cloud image boots with podman's needs met: a
+  # current kernel and cgroups v2. A hop limit of 1 keeps the role's credentials from the build's
+  # containers. provision.sh records the image to boot under the build-image-id parameter.
+  BuildLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: bootc-build
+      LaunchTemplateData:
+        ImageId: !Sub resolve:ssm:${BuildParameters}build-image-id
+        InstanceType: !Ref BuildInstanceType
+        IamInstanceProfile:
+          Arn: !GetAtt BuildInstanceProfile.Arn
+        InstanceInitiatedShutdownBehavior: terminate
+        MetadataOptions:
+          HttpTokens: required
+          HttpPutResponseHopLimit: 1
+        BlockDeviceMappings:
+          - DeviceName: /dev/sda1
+            Ebs:
+              VolumeSize: 60
+              VolumeType: gp3
+          # build-and-publish.sh installs the image onto this volume and snapshots it.
+          - DeviceName: /dev/sdf
+            Ebs:
+              VolumeSize: 32
+              VolumeType: gp3
+        TagSpecifications:
+          - ResourceType: instance
+            Tags:
+              - Key: Name
+                Value: !Ref BuildInstanceName
+        UserData:
+          Fn::Base64: !Sub |
+            #!/usr/bin/env bash
+            # The instance terminates when it powers off, which it does once the build ends and at
+            # the latest after three hours.
+            shutdown -h +180
+            export HOME=/root
+            {
+                dnf install -y -q git-core awscli2 &&
+                git clone -q --depth=1 --branch main -c credential.helper='!aws codecommit credential-helper $@' -c credential.UseHttpPath=true ${SourceRepository.CloneUrlHttp} /root/build &&
+                cd /root/build && bash build-and-publish.sh
+                echo "The build exited with status $?."
+            } > /root/build.log 2>&1
+            aws s3 cp --quiet /root/build.log "s3://${BuildLogBucket}/${BuildLog}"
+            shutdown -h now
+
+  BuildStartRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: bootc-build-start
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: states.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: run-build-instance
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: ec2:RunInstances
+                Resource: '*'
+                Condition:
+                  ArnEquals:
+                    ec2:LaunchTemplate: !Sub arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:launch-template/${BuildLaunchTemplate}
+              - Effect: Allow
+                Action: ec2:CreateTags
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    ec2:CreateAction: RunInstances
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource: !GetAtt BuildRole.Arn
+              - Effect: Allow
+                Action: ssm:GetParameters
+                Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${BuildParameters}build-image-id
+  # One execution starts one build instance. The daily rule, the push rule, and provision.sh all
+  # start builds through this state machine.
+  BuildStart:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: bootc-build
+      RoleArn: !GetAtt BuildStartRole.Arn
+      Definition:
+        StartAt: RunBuildInstance
+        States:
+          RunBuildInstance:
+            Type: Task
+            Resource: arn:aws:states:::aws-sdk:ec2:runInstances
+            Parameters:
+              LaunchTemplate:
+                LaunchTemplateId: !Ref BuildLaunchTemplate
+              MinCount: 1
+              MaxCount: 1
+            End: true
+
+  BuildTriggerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: bootc-build-trigger
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: start-build
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: states:StartExecution
+                Resource: !Ref BuildStart
+  # The daily build picks up package updates. It starts at half past the hour, so the image is
+  # published before the VM's fetch at the top of the next (bootc-fetch-apply-updates-interval.conf).
+  DailyBuild:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: bootc-build-daily
+      ScheduleExpression: cron(30 23 * * ? *)
+      Targets:
+        - Id: build
+          Arn: !Ref BuildStart
+          RoleArn: !GetAtt BuildTriggerRole.Arn
+  PushBuild:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: bootc-build-push
+      EventPattern:
+        source:
+          - aws.codecommit
+        detail-type:
+          - CodeCommit Repository State Change
+        resources:
+          - !GetAtt SourceRepository.Arn
+        detail:
+          event:
+            - referenceCreated
+            - referenceUpdated
+          referenceType:
+            - branch
+          referenceName:
+            - main
+      Targets:
+        - Id: build
+          Arn: !Ref BuildStart
+          RoleArn: !GetAtt BuildTriggerRole.Arn
+
+  VmRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: bootc-vm
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: vm
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                  - ssm:GetParametersByPath
+                Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${VmParameters}*
+              - Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:BatchGetImage
+                  - ecr:GetDownloadUrlForLayer
+                Resource: !GetAtt ImageRepository.Arn
+  VmInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: bootc-vm
+      Roles:
+        - !Ref VmRole
+
+  # nftables.conf holds the same inbound allowlist on the VM.
+  VmSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: bootc-vm
+      GroupDescription: Web, SMTP, and direct WireGuard paths from Tailscale peers
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 25
+          ToPort: 25
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: udp
+          FromPort: !Ref WireguardPort
+          ToPort: !Ref WireguardPort
+          CidrIp: 0.0.0.0/0
+  # The network interface outlives the VM and holds the address that reserve-address.sh allocates, so
+  # a new VM has the address from its first packet.
+  VmInterface:
+    Type: AWS::EC2::NetworkInterface
+    Properties:
+      SubnetId: !Ref Subnet
+      GroupSet:
+        - !GetAtt VmSecurityGroup.GroupId
+      Tags:
+        - Key: Name
+          Value: bootc-vm
+  VmAddressAssociation:
+    Type: AWS::EC2::EIPAssociation
+    Properties:
+      AllocationId: !Ref AddressAllocation
+      NetworkInterfaceId: !Ref VmInterface
+
+Outputs:
+  SourceCloneUrl:
+    Value: !GetAtt SourceRepository.CloneUrlHttp
+  BuildRoleArn:
+    Value: !GetAtt BuildRole.Arn
+  BuildStartArn:
+    Value: !Ref BuildStart
+  VmInterface:
+    Value: !Ref VmInterface

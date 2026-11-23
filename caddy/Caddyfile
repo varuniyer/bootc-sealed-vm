@@ -2,8 +2,11 @@
 	email {$ACME_EMAIL}
 	admin off
 	persist_config off
+	# caddy.socket passes Caddy the port 80 socket as fd/3 and the port 443 socket as fd/4, and every site
+	# binds one of them. The last site below issues the redirects to HTTPS, on fd/3.
+	auto_https disable_redirects
 	servers {
-		protocols h1 h2
+		protocols h1
 	}
 }
 
@@ -24,6 +27,7 @@
 }
 
 {$DOMAIN} {
+	bind fd/4
 	import security_headers
 
 	root * /usr/share/site
@@ -40,12 +44,29 @@
 	}
 }
 
-{$REDIR_LIST} {
+{$WEBSITE_ALIAS_DOMAINS} {
+	bind fd/4
 	redir https://{$DOMAIN}{uri} permanent
 }
 
 mta-sts.{$DOMAIN} {
+	bind fd/4
 	import security_headers
 	root * /run/caddy/mta-sts
 	file_server
+}
+
+# Stalwart answers Let's Encrypt's HTTP-01 challenges for its own certificate on mail.{$DOMAIN}. An
+# http:// address keeps Caddy from requesting a certificate for that name.
+http://mail.{$DOMAIN} {
+	bind fd/3
+	handle /.well-known/acme-challenge/* {
+		reverse_proxy 127.0.0.1:9000
+	}
+	respond 404
+}
+
+http:// {
+	bind fd/3
+	redir https://{host}{uri} 308
 }

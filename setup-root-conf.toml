@@ -1,0 +1,7 @@
+# Every boot starts /etc from the image's copy, under a tmpfs overlay.
+[etc]
+mount = "transient"
+
+# /var stays the image's empty directory, which fstab mounts the encrypted partition over.
+[var]
+mount = "none"

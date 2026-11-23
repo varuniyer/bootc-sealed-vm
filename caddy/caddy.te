@@ -1,0 +1,50 @@
+policy_module(caddy, 1.0.0)
+
+type caddy_t;
+type caddy_exec_t;
+init_daemon_domain(caddy_t, caddy_exec_t)
+# sandbox.conf sets NoNewPrivileges, under which systemd enters a domain only with nnp_transition.
+init_nnp_daemon_domain(caddy_t)
+
+type caddy_etc_t;
+files_config_file(caddy_etc_t)
+
+# /var/lib/caddy holds the ACME account and certificates.
+type caddy_var_lib_t;
+files_type(caddy_var_lib_t)
+
+# boot-root.sh renders caddy.service's environment and the MTA-STS policy under /run/caddy.
+type caddy_runtime_t;
+files_pid_file(caddy_runtime_t)
+
+allow caddy_t self:tcp_socket create_stream_socket_perms;
+# Type=notify's readiness message goes over a datagram socket to systemd's notify socket, which
+# carries kernel_t.
+allow caddy_t self:unix_dgram_socket create_socket_perms;
+kernel_dgram_send(caddy_t)
+
+list_dirs_pattern(caddy_t, caddy_etc_t, caddy_etc_t)
+read_files_pattern(caddy_t, caddy_etc_t, caddy_etc_t)
+files_search_var_lib(caddy_t)
+manage_dirs_pattern(caddy_t, caddy_var_lib_t, caddy_var_lib_t)
+manage_files_pattern(caddy_t, caddy_var_lib_t, caddy_var_lib_t)
+files_search_pids(caddy_t)
+list_dirs_pattern(caddy_t, caddy_runtime_t, caddy_runtime_t)
+read_files_pattern(caddy_t, caddy_runtime_t, caddy_runtime_t)
+# The site lives in /usr/share/site.
+files_read_usr_files(caddy_t)
+miscfiles_read_generic_certs(caddy_t)
+
+# systemd creates caddy.socket's sockets under caddy_t's label, so the kernel checks its binds to
+# ports 80 and 443 against caddy_t.
+corenet_tcp_bind_generic_node(caddy_t)
+corenet_tcp_bind_http_port(caddy_t)
+# ACME and OCSP reach their servers on 80 and 443, and the Caddyfile's reverse_proxy reaches Stalwart's
+# HTTP listener on 127.0.0.1:9000, which http_port_t also covers.
+corenet_tcp_connect_http_port(caddy_t)
+sysnet_dns_name_resolve(caddy_t)
+
+kernel_read_net_sysctls(caddy_t)
+dev_read_sysfs(caddy_t)
+dev_read_urand(caddy_t)
+fs_read_cgroup_files(caddy_t)

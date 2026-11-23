@@ -1,0 +1,3 @@
+# RHEL's kernel panics on an oops and then halts. Nothing logs in to restart the VM, so the kernel
+# reboots it ten seconds after a panic.
+kargs = ["panic=10"]

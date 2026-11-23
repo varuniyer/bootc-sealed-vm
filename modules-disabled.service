@@ -1,0 +1,14 @@
+[Unit]
+Description=Stop the kernel from loading further modules
+# By multi-user.target every service has started and loaded the modules it uses. After this unit the
+# kernel refuses every module, a signed one included, until the next boot.
+After=multi-user.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/sysctl kernel.modules_disabled=1
+# sandbox.conf's ProtectKernelTunables mounts /proc/sys read-only.
+ReadWritePaths=/proc/sys/kernel/modules_disabled
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,12 @@
+[Unit]
+Description=Caddy web server sockets
+
+# systemd binds both ports, so Caddy holds no capability. The Caddyfile names the sockets in this
+# order, fd/3 for port 80 and fd/4 for port 443. The 0.0.0.0 addresses make both sockets IPv4, the
+# family nftables.conf admits.
+[Socket]
+ListenStream=0.0.0.0:80
+ListenStream=0.0.0.0:443
+
+[Install]
+WantedBy=sockets.target
