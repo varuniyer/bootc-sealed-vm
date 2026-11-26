@@ -13,7 +13,8 @@ podman login --get-login registry.redhat.io >/dev/null 2>&1 || \
 run_dir=$(mktemp -d -p "${XDG_RUNTIME_DIR:?}")
 trap 'rm -r "$run_dir"' EXIT
 # Sigstore attachments carry Red Hat's signature on the base image, which build-policy.json requires.
-# Podman reads registries.d only from its config directory, so the pull takes one made for this run.
+# Podman reads registries.d only from its configuration directory, so the pull takes one made for
+# this run.
 mkdir -p "$run_dir/entitlement" "$run_dir/config/containers/registries.d" "$HOME/.aws"
 cp containers/bootc-sealed-vm.yaml "$run_dir/config/containers/registries.d/"
 XDG_CONFIG_HOME=$run_dir/config podman pull -q --signature-policy containers/build-policy.json registry.redhat.io/rhel10/rhel-bootc:latest >/dev/null
@@ -29,7 +30,7 @@ run=(podman run --rm -it --pull=never --log-driver=none --network=host --securit
 
 # The container shares this machine's network, so it reaches the tailnet, and the tailscale CLI in it
 # controls this machine's tailscaled through the socket. /tmp holds the PostgreSQL hasher's server.
-# OPERATOR_TOOLS marks the inside for the scripts.
+# OPERATOR_TOOLS tells each script that it runs inside the container.
 website_mount=()
 [ -z "${WEBSITE_CHECKOUT:-}" ] || website_mount=(-v "$WEBSITE_CHECKOUT:/website:ro")
 "${run[@]}" --tmpfs /tmp -e OPERATOR_TOOLS=1 -v /run/tailscale/tailscaled.sock:/run/tailscale/tailscaled.sock "${website_mount[@]}" localhost/operator-tools "${@:-bash}"

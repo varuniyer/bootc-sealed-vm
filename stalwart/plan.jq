@@ -1,4 +1,4 @@
-# boot-config.sh renders Stalwart's settings from this filter on every boot, and stalwart-apply.sh applies
+# boot-configuration.sh renders Stalwart's settings from this filter on every boot, and stalwart-apply.sh applies
 # them. Each top-level object is one stalwart-cli apply operation, listed parents first.
 ($mail_user + "@" + $domain) as $mailbox_address |
 {"@type": "upsert", "object": "AcmeProvider", "matchOn": ["description"], "value": {"acme": {
@@ -33,9 +33,9 @@
     "domainId": "#domain",
     "credentials": {"0": {"@type": "Password", "secret": $mail_password_hash}}
   }}},
-  # Only port 25 faces the internet, and tailscale serve terminates TLS for the loopback listeners.
-  # Every tailnet client arrives from 127.0.0.1, so tailscale serve sends its tailnet address in a PROXY
-  # header, which these listeners require from 127.0.0.1. A failed-login ban locks out that client alone.
+  # Only port 25 accepts connections from the internet, and tailscale serve terminates TLS for the
+  # loopback listeners. Every tailnet client arrives from 127.0.0.1, so tailscale serve sends its
+  # address in a PROXY header, which the listeners require from 127.0.0.1, and a ban covers it alone.
   {"@type": "reconcile", "object": "NetworkListener", "matchOn": ["name"], "value": {
     "smtp": {"name": "smtp", "protocol": "smtp", "bind": {"0.0.0.0:25": true}, "overrideProxyTrustedNetworks": {"127.0.0.1": true}},
     "submission": {"name": "submission", "protocol": "smtp", "bind": {"127.0.0.1:587": true}, "useTls": false, "overrideProxyTrustedNetworks": {"127.0.0.1": true}},
@@ -45,7 +45,8 @@
   # tailscale serve sets X-Forwarded-For to the client's tailnet address, replacing any value the
   # client sent.
   {"@type": "update", "object": "Http", "value": {"clientIpSource": "xForwardedFor"}},
-  # Stalwart's default keeps a failed-login ban forever, and the running server has no admin to lift one.
+  # Stalwart's default keeps a failed-login ban forever, and the running server has no admin to
+  # remove one.
   {"@type": "update", "object": "Security", "value": {"authBanPeriod": 3600000}},
   {"@type": "update", "object": "Imap", "value": {"allowPlainTextAuth": true}},
   # Stalwart advertises Web Push with VAPID (RFC 9749), which mail clients' JMAP push needs, only
@@ -73,8 +74,8 @@
   {"@type": "reconcile", "object": "Application", "matchOn": ["description"], "value": {"webui": {
     "description": "Stalwart Web Interface", "enable": false, "resourceUrl": "file:///nonexistent", "urlPrefix": {"/admin": true}
   }}},
-  # EC2 blocks outbound port 25, so every message for another domain leaves through Forward Email's
-  # relay, which accepts the mailbox's address as the login and as the From address.
+  # EC2 blocks outbound port 25, so every message for another domain goes out through Forward
+  # Email's relay, which accepts the mailbox's address as the login and as the From address.
   {"@type": "upsert", "object": "MtaRoute", "matchOn": ["name"], "value": {"relay": {
     "@type": "Relay",
     "name": "relay",

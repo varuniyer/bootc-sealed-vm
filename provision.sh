@@ -45,9 +45,9 @@ if [ -z "$vm_instance_id" ] && [ "$existing_parameters" != '{}' ]; then
     existing_parameters='{}'
 fi
 read_existing_parameter() { printf '%s' "$existing_parameters" | jq -r --arg key "$1" '.[$key] // empty'; }
-# pending-secrets carries each secret the VM lacks the current value of, and boot-config.sh stores
-# them on /var. It starts from any pending secrets a stopped run left in Parameter Store, so that
-# run's secrets still reach the VM.
+# pending-secrets carries each secret the VM lacks the current value of, and boot-configuration.sh
+# stores them on /var. It starts from any pending secrets a stopped run left in Parameter Store, so
+# that run's secrets still reach the VM.
 pending_secrets=$(read_existing_parameter pending-secrets)
 [ -n "$pending_secrets" ] || \
     pending_secrets='{}'
@@ -348,7 +348,7 @@ else
         call_tailscale_api -H 'Content-Type: application/json' --data @- "$tailscale_api_base/tailnet/-/keys" | jq -er .key)
     # Under Tailnet Lock, the VM signs its own node key with a credential that this machine's lock key
     # wraps into the auth key, so the coordination server never picks the node key this machine trusts.
-    # The end of the run retires the auth key's credential.
+    # The end of the run removes the auth key's credential.
     lock_enabled=$(tailscale lock status --json | jq .Enabled)
     if [ "$lock_enabled" = true ]; then
         tailscale_auth_key=$(tailscale lock sign file:<(printf '%s' "$tailscale_auth_key"))

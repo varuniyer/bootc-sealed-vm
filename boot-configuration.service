@@ -7,12 +7,12 @@ After=network-online.target
 Type=oneshot
 User=root
 Group=pghash
-ExecStart=/opt/scripts/boot-config.sh
+ExecStart=/opt/scripts/boot-configuration.sh
 RemainAfterExit=yes
 RuntimeDirectory=boot-postgresql
 RuntimeDirectoryMode=0750
-# The secret store, which holds the pending secrets each boot stores (see boot-config.sh).
-StateDirectory=boot-config
+# The secret store, which holds the pending secrets each boot stores (see boot-configuration.sh).
+StateDirectory=boot-configuration
 StateDirectoryMode=0700
 
 IPAddressAllow=any

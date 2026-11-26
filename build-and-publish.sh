@@ -8,7 +8,7 @@ source "$PWD/build.env"
 source "$PWD/region.sh"
 source "$PWD/fetch-secret.sh"
 
-# The token reaches curl through its config on stdin, so it stays out of argv.
+# The token reaches curl through its configuration on stdin, so it stays out of argv.
 instance=$(curl -sSf -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' http://169.254.169.254/latest/api/token | \
     jq -Rr '"header = \("X-aws-ec2-metadata-token: " + . | @json)"' | curl -sSf -K - http://169.254.169.254/latest/meta-data/instance-id)
 # A newer build ends every older one, whose image would otherwise replace this build's. EC2 reports

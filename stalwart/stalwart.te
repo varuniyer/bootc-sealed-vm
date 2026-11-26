@@ -14,8 +14,8 @@ files_config_file(stalwart_etc_t)
 type stalwart_var_lib_t;
 files_type(stalwart_var_lib_t)
 
-# boot-config.sh copies the DKIM key, the Web Push key, and the relay password to /run/stalwart, and
-# stalwart_t reads files of this type.
+# boot-configuration.sh copies the DKIM key, the Web Push key, and the relay password to
+# /run/stalwart, and stalwart_t reads files of this type.
 type stalwart_runtime_t;
 files_pid_file(stalwart_runtime_t)
 

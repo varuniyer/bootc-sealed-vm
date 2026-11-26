@@ -1,8 +1,8 @@
 [Unit]
 Description=Per-boot Stalwart settings from the rendered plan
-Requires=boot-config.service
+Requires=boot-configuration.service
 Wants=network-online.target
-After=boot-config.service network-online.target
+After=boot-configuration.service network-online.target
 
 [Service]
 Type=oneshot

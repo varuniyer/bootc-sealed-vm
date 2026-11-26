@@ -6,7 +6,7 @@ fetch=/opt/scripts/fetch-parameter.sh
 keys=$($fetch '')
 # remove-boot-secrets.sh removes pending-secrets from Parameter Store once a boot finished, so each
 # boot stores the pending secrets and then reads only the secret store. A key that pending-secrets
-# lacks keeps its stored value, and the sync makes the stored values outlast a reboot.
+# lacks keeps its stored value, and the sync keeps the stored values after a reboot.
 if grep -qx pending-secrets <<< "$keys"; then
     pending_secrets=$($fetch pending-secrets)
     jq -r 'keys[]' <<< "$pending_secrets" | while read -r key; do

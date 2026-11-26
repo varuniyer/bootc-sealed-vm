@@ -1,24 +1,24 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# The marker needs its own StateDirectory because this unit drops CAP_DAC_OVERRIDE
+# The logged-in file needs its own StateDirectory because this unit drops CAP_DAC_OVERRIDE
 # and /var/lib/tailscale is 0700 to tailscaled's DynamicUser.
-marker=$STATE_DIRECTORY/logged-in
-if [ ! -f "$marker" ]; then
-    # The auth key flows through a file (private /tmp) so it stays out of argv.
+logged_in_file=$STATE_DIRECTORY/logged-in
+if [ ! -f "$logged_in_file" ]; then
+    # The auth key passes through a file (private /tmp) so it stays out of argv.
     key_file=$(mktemp)
     /opt/scripts/fetch-parameter.sh tailscale-auth-key > "$key_file"
 
     tailscale up --auth-key="file:$key_file" --hostname=bootc-sealed-vm --advertise-tags=tag:vm \
         --accept-dns=false --accept-routes=false --ssh=false
     rm "$key_file"
-    touch "$marker"
+    touch "$logged_in_file"
 fi
 
-# serve --https needs the netmap's cert domains, which arrive with the node's IPs.
+# serve --https needs the netmap's certificate domains, which arrive with the node's IPs.
 until tailscale ip -4 >/dev/null 2>&1; do sleep 1; done
 
-# Serve config persists in tailscaled state, so every boot resets it to match this file.
+# Serve configuration persists in tailscaled state, so every boot resets it to match this file.
 tailscale serve reset
 tailscale serve --bg --tcp 5432 tcp://127.0.0.1:5432
 # Stalwart's HTTP listener (JMAP, CalDAV, CardDAV, WebDAV), IMAP, and submission listen in plaintext

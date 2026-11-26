@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Recovery mode serves only the management API, so no mail flows until the plan converges. Its
-# admin exists only for this run, and the server stalwart.service starts holds no admin credential.
+# Recovery mode serves only the management API, so Stalwart handles no mail until the plan is
+# applied. Its admin exists only for this run, and the server stalwart.service starts holds no
+# admin credential.
 secret=$(head -c 32 /dev/urandom | base64)
 STALWART_RECOVERY_MODE=1 STALWART_RECOVERY_MODE_PORT=8008 STALWART_RECOVERY_ADMIN="admin:$secret" \
     /usr/bin/stalwart --config /etc/stalwart/config.json &

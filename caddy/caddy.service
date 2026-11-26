@@ -1,7 +1,7 @@
 [Unit]
 Description=Caddy web server
-Requires=boot-config.service caddy.socket
-After=network-online.target boot-config.service caddy.socket
+Requires=boot-configuration.service caddy.socket
+After=network-online.target boot-configuration.service caddy.socket
 Wants=network-online.target
 
 [Service]

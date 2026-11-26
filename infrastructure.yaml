@@ -127,7 +127,7 @@ Resources:
               - Effect: Allow
                 Action: s3:PutObject
                 Resource: !Sub ${BuildLogBucket.Arn}/${BuildLog}
-              # tailscale/apply-policy.sh trades this token for a Tailscale API token.
+              # tailscale/apply-policy.sh exchanges this token for a Tailscale API token.
               - Effect: Allow
                 Action: sts:GetWebIdentityToken
                 Resource: '*'

@@ -2,8 +2,8 @@
 set -euo pipefail
 
 # AWS signs a token that proves the caller is the build instance's role, and Tailscale's federated
-# credential trades it for a short-lived API token that may only change the policy file. Each token
-# reaches curl on stdin, so none appears in argv.
+# credential exchanges it for a short-lived API token that may only change the policy file. Each
+# token reaches curl on stdin, so none appears in argv.
 source "$PWD/build.env"
 tailscale_policy_client_id=$(aws ssm get-parameter --name "${BUILD_PARAMETERS}tailscale-policy-client-id" --query Parameter.Value --output text)
 tailscale_policy_audience=$(aws ssm get-parameter --name "${BUILD_PARAMETERS}tailscale-policy-audience" --query Parameter.Value --output text)

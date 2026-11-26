@@ -96,9 +96,9 @@ COPY containers/sigpolicy.toml /usr/lib/bootc/install/sigpolicy.toml
 COPY postgresql/postgresql.conf postgresql/pg_hba.conf /etc/postgresql/
 COPY postgresql/bootstrap.sql /usr/share/boot-postgresql/
 
-COPY setup.sh boot-config.sh aws-api.sh fetch-parameter.sh ecr-login.sh var/repart-var.sh tailscale/boot-tailscale.sh postgresql/boot-postgresql.sh postgresql/bootstrap.sh stalwart/stalwart-apply.sh /opt/scripts/
-COPY boot-config.service modules-disabled.service tailscale/boot-tailscale.service postgresql/boot-postgresql.service postgresql/postgresql.service caddy/caddy.service caddy/caddy.socket stalwart/stalwart.service stalwart/stalwart-apply.service /usr/lib/systemd/system/
-COPY boot-config-capabilities.conf /usr/lib/systemd/system/boot-config.service.d/zz-capabilities.conf
+COPY setup.sh boot-configuration.sh aws-api.sh fetch-parameter.sh ecr-login.sh var/repart-var.sh tailscale/boot-tailscale.sh postgresql/boot-postgresql.sh postgresql/bootstrap.sh stalwart/stalwart-apply.sh /opt/scripts/
+COPY boot-configuration.service modules-disabled.service tailscale/boot-tailscale.service postgresql/boot-postgresql.service postgresql/postgresql.service caddy/caddy.service caddy/caddy.socket stalwart/stalwart.service stalwart/stalwart-apply.service /usr/lib/systemd/system/
+COPY boot-configuration-capabilities.conf /usr/lib/systemd/system/boot-configuration.service.d/zz-capabilities.conf
 COPY stalwart/stalwart-capabilities.conf /usr/lib/systemd/system/stalwart.service.d/zz-capabilities.conf
 # The Tailscale RPM owns /usr/lib/systemd/system/tailscaled.service, and a unit in /etc/systemd/system replaces it.
 COPY tailscale/tailscaled.service /etc/systemd/system/tailscaled.service

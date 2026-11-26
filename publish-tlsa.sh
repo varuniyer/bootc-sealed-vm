@@ -3,7 +3,7 @@ set -euo pipefail
 
 # DANE senders deliver only to the key the TLSA record pins. This pins the key of the certificate
 # Stalwart serves once Let's Encrypt's chain validates it for mail.<DOMAIN>. A failed check changes
-# nothing, because a record that pins the current key must survive a passing network fault.
+# nothing, so a record that pins the current key stays in place through a transient network fault.
 
 # operator-tools.sh runs this script in the operator-tools image, which supplies every tool it uses.
 [ -n "${OPERATOR_TOOLS:-}" ] || \
