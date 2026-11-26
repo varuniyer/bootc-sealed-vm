@@ -1,11 +1,6 @@
 FROM registry.redhat.io/rhel10/rhel-bootc:latest AS base
 
 
-# build-and-publish.sh verifies the website repository's attestation on site.tar.gz before the build.
-FROM scratch AS site
-ADD site.tar.gz /site/
-
-
 # build-and-publish.sh verifies the Stalwart server and CLI attestations before the build.
 FROM scratch AS stalwart
 ADD stalwart-aarch64-unknown-linux-gnu.tar.gz stalwart-cli-aarch64-unknown-linux-gnu.tar.xz /stalwart/
@@ -55,7 +50,7 @@ RUN make -C /selinux -f /usr/share/selinux/devel/Makefile
 
 FROM base AS rootfs
 
-COPY --chown=0:0 --from=site /site /usr/share/site
+COPY --chown=0:0 site/ /usr/share/site/
 COPY --chown=0:0 --from=caddy-build /build/caddy /usr/bin/
 COPY --chown=0:0 sealed/boot/signed/ /usr/lib/systemd/boot/efi/
 # The server tarball stores its binary without the executable bit.

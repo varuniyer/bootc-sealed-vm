@@ -6,6 +6,8 @@ Description: >-
 Parameters:
   Repository:
     Type: String
+  WebsiteRepository:
+    Type: String
   SecurebootKey:
     Type: String
   PcrKey:
@@ -38,6 +40,11 @@ Resources:
     Type: AWS::CodeCommit::Repository
     Properties:
       RepositoryName: !Ref Repository
+
+  WebsiteSourceRepository:
+    Type: AWS::CodeCommit::Repository
+    Properties:
+      RepositoryName: !Ref WebsiteRepository
 
   # Each build replaces the latest tag, which leaves the last image untagged, and adds a signature
   # tagged sha256-<digest>.sig.
@@ -81,7 +88,9 @@ Resources:
             Statement:
               - Effect: Allow
                 Action: codecommit:GitPull
-                Resource: !GetAtt SourceRepository.Arn
+                Resource:
+                  - !GetAtt SourceRepository.Arn
+                  - !GetAtt WebsiteSourceRepository.Arn
               - Effect: Allow
                 Action: ecr:GetAuthorizationToken
                 Resource: '*'
@@ -186,7 +195,9 @@ Resources:
             export HOME=/root
             {
                 dnf install -y -q git-core awscli2 &&
-                git clone -q --depth=1 --branch main -c credential.helper='!aws codecommit credential-helper $@' -c credential.UseHttpPath=true ${SourceRepository.CloneUrlHttp} /root/build &&
+                git config --global credential.helper '!aws codecommit credential-helper $@' && git config --global credential.UseHttpPath true &&
+                git clone -q --depth=1 --branch main ${SourceRepository.CloneUrlHttp} /root/build &&
+                git clone -q --depth=1 --branch main ${WebsiteSourceRepository.CloneUrlHttp} /root/website &&
                 cd /root/build && bash build-and-publish.sh
                 echo "The build exited with status $?."
             } > /root/build.log 2>&1
@@ -288,6 +299,7 @@ Resources:
           - CodeCommit Repository State Change
         resources:
           - !GetAtt SourceRepository.Arn
+          - !GetAtt WebsiteSourceRepository.Arn
         detail:
           event:
             - referenceCreated
@@ -381,6 +393,8 @@ Resources:
 Outputs:
   SourceCloneUrl:
     Value: !GetAtt SourceRepository.CloneUrlHttp
+  WebsiteSourceCloneUrl:
+    Value: !GetAtt WebsiteSourceRepository.CloneUrlHttp
   BuildRoleArn:
     Value: !GetAtt BuildRole.Arn
   BuildStartArn:

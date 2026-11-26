@@ -31,9 +31,9 @@ fetch_attested() {
     gh attestation verify "$3" --bundle "$3.jsonl" --repo "$1" --signer-workflow "$1/.github/workflows/$4" --source-ref "$5"
 }
 fetch_latest_release() { curl -sSf "https://api.github.com/repos/$1/releases/latest" | jq -er .tag_name; }
-# The website repository's publish workflow on main builds and attests site.tar.gz, and the site stage
-# unpacks it only after this check.
-fetch_attested "$WEBSITE_REPOSITORY" site-tarball site.tar.gz publish.yml refs/heads/main
+# The instance cloned the website's main to /root/website (see infrastructure.yaml), and its
+# Containerfile pins each base image by digest. The rootfs stage copies the built tree from site/.
+podman build --layers=false -o site /root/website
 # Stalwart's release workflows build and attest the server and CLI tarballs from each release tag,
 # and the stalwart stage unpacks them only after these checks.
 stalwart_tag=$(fetch_latest_release stalwartlabs/stalwart)

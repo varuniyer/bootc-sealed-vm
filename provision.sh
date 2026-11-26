@@ -105,7 +105,7 @@ zones=$(aws ec2 describe-instance-type-offerings --location-type availability-zo
 subnet=$(aws ec2 describe-subnets --filters Name=default-for-az,Values=true "Name=availability-zone,Values=$zones" --query 'sort_by(Subnets, &AvailabilityZone)[0].SubnetId' --output text)
 stack=bootc
 aws cloudformation deploy --stack-name "$stack" --template-file infrastructure.yaml --capabilities CAPABILITY_NAMED_IAM --no-fail-on-empty-changeset --parameter-overrides \
-    "Repository=$REPOSITORY" "SecurebootKey=$SECUREBOOT_KEY" "PcrKey=$PCR_KEY" "ImageKey=$IMAGE_KEY" "BuildSecret=$BUILD_SECRET" "EntitlementCertificateSecret=$ENTITLEMENT_CERTIFICATE_SECRET" "BuildParameters=$BUILD_PARAMETERS" "VmParameters=$VM_PARAMETERS" "BuildInstanceType=$BUILD_INSTANCE_TYPE" "BuildInstanceName=$BUILD_INSTANCE_NAME" "BuildLog=$BUILD_LOG" "Subnet=$subnet" "AddressAllocation=$address_allocation" "WireguardPort=$WIREGUARD_PORT"
+    "Repository=$REPOSITORY" "WebsiteRepository=$WEBSITE_REPOSITORY" "SecurebootKey=$SECUREBOOT_KEY" "PcrKey=$PCR_KEY" "ImageKey=$IMAGE_KEY" "BuildSecret=$BUILD_SECRET" "EntitlementCertificateSecret=$ENTITLEMENT_CERTIFICATE_SECRET" "BuildParameters=$BUILD_PARAMETERS" "VmParameters=$VM_PARAMETERS" "BuildInstanceType=$BUILD_INSTANCE_TYPE" "BuildInstanceName=$BUILD_INSTANCE_NAME" "BuildLog=$BUILD_LOG" "Subnet=$subnet" "AddressAllocation=$address_allocation" "WireguardPort=$WIREGUARD_PORT"
 fetch_stack_output() { aws cloudformation describe-stacks --stack-name "$stack" --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" --output text; }
 fetch_build_parameter_name() { aws ssm get-parameters --names "$BUILD_PARAMETERS$1" --query 'Parameters[].Name' --output text; }
 
@@ -167,8 +167,15 @@ secureboot_certificate_listed=$(fetch_build_parameter_name secureboot-certificat
         aws ssm put-parameter --name "${BUILD_PARAMETERS}secureboot-certificate" --type String --value "$secureboot_certificate" >/dev/null
     }
 
-# The build clones main from CodeCommit, so the first run pushes this checkout's main there, and the
-# push starts a build. A run that finds the branch and no seed image starts one here.
+# Each build clones main from this repository's and the website's CodeCommit repositories. The
+# website's checkout lies outside the provisioner's container, so the operator pushes its main.
+if ! aws codecommit get-branch --repository-name "$WEBSITE_REPOSITORY" --branch-name main >/dev/null 2>&1; then
+    website_clone_url=$(fetch_stack_output WebsiteSourceCloneUrl)
+    echo "The website's CodeCommit repository has no main branch. Push the website's main to $website_clone_url, then run provision.sh again (see README)." >&2
+    exit 1
+fi
+# The first run pushes this checkout's main to this repository's CodeCommit repository, and the push
+# starts a build. A run that finds the branch and no seed image starts one here.
 seed_image_state=$(fetch_seed_image State)
 main_branch_listed=$(aws codecommit get-branch --repository-name "$REPOSITORY" --branch-name main --query branch.branchName --output text 2>/dev/null) || \
     {
