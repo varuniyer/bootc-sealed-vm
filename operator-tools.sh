@@ -28,7 +28,7 @@ run=(podman run --rm -it --pull=never --log-driver=none --network=host --securit
 "${build[@]}" --target operator-tools -t localhost/operator-tools --secret "id=entitlement_certificate,src=$run_dir/entitlement/certificate" --secret "id=entitlement_key,src=$run_dir/entitlement/key" . >/dev/null
 
 # The container shares this machine's network, so it reaches the tailnet, and the tailscale CLI in it
-# drives this machine's tailscaled through the socket. /tmp holds the PostgreSQL hasher's server.
+# controls this machine's tailscaled through the socket. /tmp holds the PostgreSQL hasher's server.
 # OPERATOR_TOOLS marks the inside for the scripts.
 website_mount=()
 [ -z "${WEBSITE_CHECKOUT:-}" ] || website_mount=(-v "$WEBSITE_CHECKOUT:/website:ro")

@@ -277,8 +277,9 @@ Resources:
               - Effect: Allow
                 Action: states:StartExecution
                 Resource: !Ref BuildStart
-  # The daily build picks up package updates. It starts at half past the hour, so the image is
-  # published before the VM's fetch at the top of the next (bootc-fetch-apply-updates-interval.conf).
+  # The daily build includes the latest package updates. It starts at half past the hour, so the
+  # image is published before the VM's fetch at the top of the next
+  # (bootc-fetch-apply-updates-interval.conf).
   DailyBuild:
     Type: AWS::Events::Rule
     Properties:

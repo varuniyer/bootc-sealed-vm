@@ -86,8 +86,8 @@
   }}},
   {"@type": "update", "object": "MtaOutboundStrategy", "value": {
     "route": {"match": {"0": {"if": "is_local_domain(rcpt_domain)", "then": "'local'"}}, "else": "'relay'"},
-    # Stalwart's default retries a failed TLS handshake without certificate checks, which would hand
-    # the relay password to whoever answers.
+    # Stalwart's default retries a failed TLS handshake without certificate checks, which would send
+    # the relay password to whatever server answers.
     "tls": {"else": "'default'"}
   }},
   # journald captures stdout and forwards it to the serial console.

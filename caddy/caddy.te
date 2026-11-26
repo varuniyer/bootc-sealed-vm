@@ -20,7 +20,7 @@ files_pid_file(caddy_runtime_t)
 
 allow caddy_t self:tcp_socket create_stream_socket_perms;
 # Type=notify's readiness message goes over a datagram socket to systemd's notify socket, which
-# carries kernel_t.
+# has the label kernel_t.
 allow caddy_t self:unix_dgram_socket create_socket_perms;
 kernel_dgram_send(caddy_t)
 
@@ -32,7 +32,7 @@ manage_files_pattern(caddy_t, caddy_var_lib_t, caddy_var_lib_t)
 files_search_pids(caddy_t)
 list_dirs_pattern(caddy_t, caddy_runtime_t, caddy_runtime_t)
 read_files_pattern(caddy_t, caddy_runtime_t, caddy_runtime_t)
-# The site lives in /usr/share/site.
+# The site is in /usr/share/site.
 files_read_usr_files(caddy_t)
 miscfiles_read_generic_certs(caddy_t)
 

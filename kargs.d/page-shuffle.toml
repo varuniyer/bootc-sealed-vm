@@ -1,3 +1,3 @@
 # RHEL's kernel builds the page allocator's free-list shuffling in and leaves it off. Shuffling makes
-# the order in which the allocator hands out pages differ from boot to boot.
+# the order in which the allocator allocates pages differ from boot to boot.
 kargs = ["page_alloc.shuffle=1"]

@@ -33,7 +33,7 @@ fs_getattr_xattr_fs(stalwart_t)
 files_search_pids(stalwart_t)
 list_dirs_pattern(stalwart_t, stalwart_runtime_t, stalwart_runtime_t)
 read_files_pattern(stalwart_t, stalwart_runtime_t, stalwart_runtime_t)
-# The spam filter's rule set lives in /usr/share/stalwart.
+# The spam filter's rule set is in /usr/share/stalwart.
 files_read_usr_files(stalwart_t)
 miscfiles_read_generic_certs(stalwart_t)
 

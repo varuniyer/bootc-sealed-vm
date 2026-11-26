@@ -106,7 +106,7 @@ if [ -z "$address_allocation" ]; then
 fi
 
 # infrastructure.yaml holds the other AWS resources that remain when the VM is deleted, and a deploy
-# changes only the resources whose definitions changed. The VM's network interface lives in the
+# changes only the resources whose definitions changed. The VM's network interface is in the
 # default subnet of the first zone that offers the instance type.
 zones=$(aws ec2 describe-instance-type-offerings --location-type availability-zone --filters "Name=instance-type,Values=$VM_INSTANCE_TYPE" --query 'InstanceTypeOfferings[].Location' --output text | tr '\t' ,)
 subnet=$(aws ec2 describe-subnets --filters Name=default-for-az,Values=true "Name=availability-zone,Values=$zones" --query 'sort_by(Subnets, &AvailabilityZone)[0].SubnetId' --output text)

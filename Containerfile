@@ -30,7 +30,7 @@ RUN bash /install.sh
 
 
 # operator-tools.sh tags the aws-cli stage localhost/aws-cli, builds this stage alone, and runs each
-# operator script in it, so the scripts take every tool from signed sources. initdb and pg_ctl live
+# operator script in it, so the scripts take every tool from signed sources. initdb and pg_ctl are
 # in PGDG's directory.
 FROM localhost/aws-cli AS operator-tools
 COPY tailscale/tailscale.repo postgresql/pgdg.repo /etc/yum.repos.d/

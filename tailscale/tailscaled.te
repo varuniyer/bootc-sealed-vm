@@ -22,7 +22,7 @@ allow tailscaled_t self:unix_stream_socket create_stream_socket_perms;
 # tailscaled watches addresses and routes over netlink.
 allow tailscaled_t self:netlink_route_socket create_netlink_socket_perms;
 # Type=notify's readiness message goes over a datagram socket to systemd's notify socket, which
-# carries kernel_t.
+# has the label kernel_t.
 allow tailscaled_t self:unix_dgram_socket create_socket_perms;
 kernel_dgram_send(tailscaled_t)
 
