@@ -21,7 +21,7 @@ dnf clean all
 # CacheDirectory= creates /var/cache/tailscale at start. Under DynamicUser=, systemd migrates the RPM's
 # root-owned copy into /var/cache/private, a rename that fails across overlay layers.
 rmdir /var/cache/tailscale
-# PGDG's RPM ships a per-version data tree and a login profile, and pgdata.conf's data directory uses neither.
+# PGDG's RPM installs a per-version data tree and a login profile, and pgdata.conf's data directory uses neither.
 rm -r /var/lib/pgsql/17 /var/lib/pgsql/.bash_profile
 # PGDG's RPM gives postgres a login shell.
 usermod -s /usr/sbin/nologin postgres
@@ -34,8 +34,8 @@ systemctl mask bootc-generic-growpart.service
 # fails at every boot. The VM has one vCPU, which leaves no interrupts to balance.
 systemctl mask irqbalance.service
 # systemd-sysext and systemd-confext merge extensions from /var/lib/extensions and /var/lib/confexts
-# over /usr and /etc before sysinit.target. The image ships none, and the composefs digest covers no
-# file on /var.
+# over /usr and /etc before sysinit.target. The image contains none, and the composefs digest covers
+# no file on /var.
 systemctl mask systemd-sysext.service systemd-confext.service
 
 semodule -n -i /usr/share/selinux/packages/bootc-sealed-vm/*.pp
@@ -56,7 +56,7 @@ dracut --no-hostonly --force --kver "$KVER" /usr/lib/modules/"$KVER"/initramfs.i
 # seal.sh's build_uki reads them.
 bootc container split-kernel-and-rootfs --rootfs / --output /kernel
 
-# The base image ships group-writable files that its own RPMs declare 0644,
+# The base image contains group-writable files that its own RPMs declare 0644,
 # and a umask-002 checkout makes COPY'd files group-writable.
 find /usr /etc /opt \( -type f -o -type d \) -perm /022 -exec chmod go-w {} +
 
@@ -68,7 +68,7 @@ chmod 0640 /etc/caddy/Caddyfile
 groupadd -r pghash
 usermod -aG pghash postgres
 
-# Every shipped unit links the shared restrictions.
+# Every unit this repository provides links the shared restrictions.
 for unit in boot-config modules-disabled boot-tailscale boot-postgresql tailscaled caddy postgresql stalwart-apply stalwart; do
     mkdir -p /usr/lib/systemd/system/$unit.service.d
     ln -s ../../service-restrictions.conf /usr/lib/systemd/system/$unit.service.d/service-restrictions.conf

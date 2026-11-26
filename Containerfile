@@ -123,6 +123,6 @@ LABEL containers.bootc=1
 
 # build-and-publish.sh tags the flattened stage localhost/flattened, runs seal.sh over it, and then
 # builds this stage alone. The UKI's command line carries the composefs digest of the flattened
-# stage, which covers every file the image ships outside /boot.
+# stage, which covers every file the image contains outside /boot.
 FROM localhost/flattened AS sealed
 COPY --chown=0:0 sealed/uki/signed/ /boot/EFI/Linux/

@@ -63,7 +63,7 @@
   {"@type": "update", "object": "SpfReportSettings", "value": {"sendFrequency": {"else": "false"}}},
   {"@type": "update", "object": "DkimReportSettings", "value": {"sendFrequency": {"else": "false"}}},
   {"@type": "update", "object": "TlsReportSettings", "value": {"sendFrequency": {"else": "disable"}}},
-  # The spam filter reads its rule set from the file the image ships. A task is deleted once it
+  # The spam filter reads its rule set from the file the image contains. A task is deleted once it
   # runs, so each boot's task loads the rule set of the image that booted.
   {"@type": "update", "object": "SpamSettings", "value": {"spamFilterRulesUrl": "file:///usr/share/stalwart/spam-filter-rules.json.gz"}},
   {"@type": "create", "object": "Task", "value": {"rules": {
