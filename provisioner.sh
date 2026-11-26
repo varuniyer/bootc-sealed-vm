@@ -2,7 +2,8 @@
 set -euo pipefail
 
 # Runs a command, or a shell, in the provisioner image, which every run builds from Red Hat's signed
-# base image and signed packages. This machine supplies only bash, Podman, its tailscaled, and ~/.aws.
+# base image and signed packages. This machine supplies only bash, Podman, its tailscaled, ~/.aws, and
+# for provision.sh the website's checkout, whose path arrives in WEBSITE_CHECKOUT.
 
 podman login --get-login registry.redhat.io >/dev/null 2>&1 || \
     {
@@ -29,4 +30,6 @@ run=(podman run --rm -it --pull=never --log-driver=none --network=host --securit
 # The container shares this machine's network, so it reaches the tailnet, and the tailscale CLI in it
 # drives this machine's tailscaled through the socket. /tmp holds the PostgreSQL hasher's server.
 # PROVISIONER marks the inside for the scripts.
-"${run[@]}" --tmpfs /tmp -e PROVISIONER=1 -v /run/tailscale/tailscaled.sock:/run/tailscale/tailscaled.sock localhost/provisioner "${@:-bash}"
+website=()
+[ -z "${WEBSITE_CHECKOUT:-}" ] || website=(-v "$WEBSITE_CHECKOUT:/website:ro")
+"${run[@]}" --tmpfs /tmp -e PROVISIONER=1 -v /run/tailscale/tailscaled.sock:/run/tailscale/tailscaled.sock "${website[@]}" localhost/provisioner "${@:-bash}"

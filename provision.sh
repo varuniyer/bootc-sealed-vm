@@ -12,9 +12,14 @@ MAIL_USER=varun
 MAIL_ALIAS_DOMAINS="varuniyer.info"
 TAILNET=tailbc280c.ts.net
 
-# provisioner.sh runs this script in the provisioner image, which supplies every tool it uses.
+# provisioner.sh runs this script in the provisioner image, which supplies every tool it uses. $1 is
+# the website's checkout, which provisioner.sh mounts read-only at /website.
 [ -n "${PROVISIONER:-}" ] || \
-    exec "$PWD/provisioner.sh" "./${0##*/}" "$@"
+    {
+        WEBSITE_CHECKOUT=$(realpath -e "${1:?Pass the path to the website checkout.}")
+        export WEBSITE_CHECKOUT
+        exec "$PWD/provisioner.sh" "./${0##*/}"
+    }
 
 source "$PWD/build.env"
 source "$PWD/region.sh"
@@ -167,20 +172,20 @@ secureboot_certificate_listed=$(fetch_build_parameter_name secureboot-certificat
         aws ssm put-parameter --name "${BUILD_PARAMETERS}secureboot-certificate" --type String --value "$secureboot_certificate" >/dev/null
     }
 
-# Each build clones main from this repository's and the website's CodeCommit repositories. The
-# website's checkout lies outside the provisioner's container, so the operator pushes its main.
-if ! aws codecommit get-branch --repository-name "$WEBSITE_REPOSITORY" --branch-name main >/dev/null 2>&1; then
-    website_clone_url=$(fetch_stack_output WebsiteSourceCloneUrl)
-    echo "The website's CodeCommit repository has no main branch. Push the website's main to $website_clone_url, then run provision.sh again (see README)." >&2
-    exit 1
-fi
-# The first run pushes this checkout's main to this repository's CodeCommit repository, and the push
-# starts a build. A run that finds the branch and no seed image starts one here.
+# Each build clones main from this repository's and the website's CodeCommit repositories. The first
+# run pushes main from each checkout, and each push starts a build. A newer build ends an older one,
+# and a run that finds this repository's branch and no seed image starts one here.
+codecommit_git=(git -c credential.helper='!aws codecommit credential-helper $@' -c credential.UseHttpPath=true)
+aws codecommit get-branch --repository-name "$WEBSITE_REPOSITORY" --branch-name main >/dev/null 2>&1 || \
+    {
+        website_clone_url=$(fetch_stack_output WebsiteSourceCloneUrl)
+        "${codecommit_git[@]}" -C /website push "$website_clone_url" main
+    }
 seed_image_state=$(fetch_seed_image State)
 main_branch_listed=$(aws codecommit get-branch --repository-name "$REPOSITORY" --branch-name main --query branch.branchName --output text 2>/dev/null) || \
     {
         source_clone_url=$(fetch_stack_output SourceCloneUrl)
-        git -c credential.helper='!aws codecommit credential-helper $@' -c credential.UseHttpPath=true push "$source_clone_url" main
+        "${codecommit_git[@]}" push "$source_clone_url" main
     }
 [ -z "$main_branch_listed" ] || [ -n "$seed_image_state" ] || \
     {
