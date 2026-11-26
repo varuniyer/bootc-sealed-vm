@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Runs as root on a build instance (see infrastructure.yaml). The instance's role reads the build's
-# secrets, signs with the KMS keys, pushes the image, and replaces the seed image.
+# secrets, signs with the KMS keys, pushes the image, and replaces the VM AMI.
 dnf install -y -q podman skopeo jq gh openssl python3-virt-firmware
 source "$PWD/build.env"
 source "$PWD/region.sh"
@@ -118,7 +118,7 @@ printf '{"imageLayoutVersion":"1.0.0"}' > $attachment/oci-layout
 jq -nc --argjson manifest "$manifest" '{schemaVersion: 2, manifests: [{mediaType: "application/vnd.oci.image.manifest.v1+json"} + $manifest]}' > $attachment/index.json
 skopeo copy "oci:$attachment" "docker://${IMAGE%:*}:${digest/:/-}.sig"
 
-# The image installs itself onto the instance's second volume, which becomes the seed image's
+# The image installs itself onto the instance's second volume, which becomes the VM AMI's
 # snapshot. --generic-image leaves the instance's own firmware variables alone.
 volume=$(aws ec2 describe-volumes --filters "Name=attachment.instance-id,Values=$instance" Name=attachment.device,Values=/dev/sdf --query 'Volumes[0].VolumeId' --output text)
 GRAPH_ROOT=$(podman info --format '{{.Store.GraphRoot}}')
@@ -127,7 +127,7 @@ podman run --rm --privileged --pid=host --security-opt label=type:unconfined_t -
 sync
 snapshot=$(aws ec2 create-snapshot \
     --volume-id "$volume" \
-    --description "$SEED_IMAGE" \
+    --description "$VM_AMI" \
     --query SnapshotId --output text)
 # The waiter gives up after ten minutes, and a first snapshot of the volume can take longer.
 aws ec2 wait snapshot-completed --snapshot-ids "$snapshot" || aws ec2 wait snapshot-completed --snapshot-ids "$snapshot"
@@ -136,11 +136,11 @@ aws ec2 wait snapshot-completed --snapshot-ids "$snapshot" || aws ec2 wait snaps
 # database. The GUID names the entries' owner, and a fixed one keeps PCR 7 the same for every VM.
 owner=6e0c3a2a-58c5-4b0b-9d2f-7b7a3c1f4e11
 virt-fw-vars --set-pk $owner sealed/secureboot.crt --add-kek $owner sealed/secureboot.crt --add-db $owner sealed/secureboot.crt --secure-boot --output-aws sealed/uefi-data
-old_seed_image=$(aws ec2 describe-images --owners self --filters "Name=name,Values=$SEED_IMAGE" --query 'Images[].[ImageId,BlockDeviceMappings[0].Ebs.SnapshotId]' --output text)
-if [ -n "$old_seed_image" ]; then
-    read -r old_seed_image_id old_snapshot <<< "$old_seed_image"
-    aws ec2 deregister-image --image-id "$old_seed_image_id"
+old_vm_ami=$(aws ec2 describe-images --owners self --filters "Name=name,Values=$VM_AMI" --query 'Images[].[ImageId,BlockDeviceMappings[0].Ebs.SnapshotId]' --output text)
+if [ -n "$old_vm_ami" ]; then
+    read -r old_vm_ami_id old_snapshot <<< "$old_vm_ami"
+    aws ec2 deregister-image --image-id "$old_vm_ami_id"
     aws ec2 delete-snapshot --snapshot-id "$old_snapshot"
 fi
-aws ec2 register-image --name "$SEED_IMAGE" --architecture arm64 --boot-mode uefi --tpm-support v2.0 --ena-support --virtualization-type hvm --root-device-name /dev/sda1 \
+aws ec2 register-image --name "$VM_AMI" --architecture arm64 --boot-mode uefi --tpm-support v2.0 --ena-support --virtualization-type hvm --root-device-name /dev/sda1 \
     --block-device-mappings "DeviceName=/dev/sda1,Ebs={SnapshotId=$snapshot,VolumeType=gp3}" --uefi-data "$(<sealed/uefi-data)" >/dev/null

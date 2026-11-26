@@ -157,13 +157,13 @@ Resources:
 
   # Each build runs on its own instance, which Fedora's cloud image boots with podman's needs met: a
   # current kernel and cgroups v2. A hop limit of 1 keeps the role's credentials from the build's
-  # containers. provision.sh records the image to boot under the build-image-id parameter.
+  # containers. provision.sh records the AMI to boot under the build-instance-ami-id parameter.
   BuildLaunchTemplate:
     Type: AWS::EC2::LaunchTemplate
     Properties:
       LaunchTemplateName: bootc-build
       LaunchTemplateData:
-        ImageId: !Sub resolve:ssm:${BuildParameters}build-image-id
+        ImageId: !Sub resolve:ssm:${BuildParameters}build-instance-ami-id
         InstanceType: !Ref BuildInstanceType
         IamInstanceProfile:
           Arn: !GetAtt BuildInstanceProfile.Arn
@@ -237,7 +237,7 @@ Resources:
                 Resource: !GetAtt BuildRole.Arn
               - Effect: Allow
                 Action: ssm:GetParameters
-                Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${BuildParameters}build-image-id
+                Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${BuildParameters}build-instance-ami-id
   # One execution starts one build instance. The daily rule, the push rule, and provision.sh all
   # start builds through this state machine.
   BuildStart:

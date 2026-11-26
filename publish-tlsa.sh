@@ -10,6 +10,8 @@ set -euo pipefail
     exec "$PWD/operator-tools.sh" "./${0##*/}" "$@"
 source "$PWD/build.env"
 source "$PWD/region.sh"
+source "$PWD/read-secret.sh"
+source "$PWD/fetch-this-machine.sh"
 source "$PWD/desec.sh"
 
 # tailscale/policy.json lets only tag:operator reach the VM's tailnet port 25.

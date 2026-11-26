@@ -23,6 +23,8 @@ TAILNET=tailbc280c.ts.net
 
 source "$PWD/build.env"
 source "$PWD/region.sh"
+source "$PWD/read-secret.sh"
+source "$PWD/fetch-this-machine.sh"
 source "$PWD/desec.sh"
 source "$PWD/tailscale/wireguard-port.env"
 
@@ -42,16 +44,16 @@ if [ -z "$vm_instance_id" ] && [ "$existing_parameters" != '{}' ]; then
     jq -r --arg path "$VM_PARAMETERS" 'keys[] | $path + .' <<< "$existing_parameters" | xargs -n 10 aws ssm delete-parameters --names >/dev/null
     existing_parameters='{}'
 fi
-read_existing() { printf '%s' "$existing_parameters" | jq -r --arg key "$1" '.[$key] // empty'; }
-# The inbox carries each secret the VM lacks the current value of, and boot-config.sh stores what it
-# carries on /var. It starts from any inbox a stopped run left in Parameter Store, so that run's
-# secrets still reach the VM.
-inbox=$(read_existing inbox)
-[ -n "$inbox" ] || \
-    inbox='{}'
-# add_to_inbox prints the inbox with the secret on its stdin added under key $1. The inbox reaches jq
-# through /dev/fd, so both stay outside argv.
-add_to_inbox() { jq -Rsc --arg key "$1" --slurpfile inbox <(printf '%s' "$inbox") '$inbox[0] + {($key): .}'; }
+read_existing_parameter() { printf '%s' "$existing_parameters" | jq -r --arg key "$1" '.[$key] // empty'; }
+# pending-secrets carries each secret the VM lacks the current value of, and boot-config.sh stores
+# them on /var. It starts from any pending secrets a stopped run left in Parameter Store, so that
+# run's secrets still reach the VM.
+pending_secrets=$(read_existing_parameter pending-secrets)
+[ -n "$pending_secrets" ] || \
+    pending_secrets='{}'
+# add_pending_secret prints the pending secrets with the secret on its stdin added under key $1. The
+# pending secrets reach jq through /dev/fd, so both stay outside argv.
+add_pending_secret() { jq -Rsc --arg key "$1" --slurpfile pending_secrets <(printf '%s' "$pending_secrets") '$pending_secrets[0] + {($key): .}'; }
 read_secret "Mail password for $MAIL_USER@$DOMAIN" MAIL_PASSWORD
 read_secret "Relay password of the Forward Email alias $MAIL_USER@$DOMAIN" RELAY_PASSWORD
 create_desec_token provision
@@ -61,7 +63,7 @@ create_desec_token provision
 # rejects it. The JMAP session endpoint answers only a signed-in client.
 if [ -z "$vm_instance_id" ] || ! printf '%s:%s' "$MAIL_USER" "$MAIL_PASSWORD" | jq -Rrs '"user = " + @json' | \
         curl -sfL --max-time 30 -o /dev/null -K - "https://$REPOSITORY.$TAILNET/.well-known/jmap"; then
-    inbox=$(printf '%s' "$MAIL_PASSWORD" | htpasswd -niBC 12 "$MAIL_USER" | cut -d: -f2- | tr -d '\n' | add_to_inbox mail-password-hash)
+    pending_secrets=$(printf '%s' "$MAIL_PASSWORD" | htpasswd -niBC 12 "$MAIL_USER" | cut -d: -f2- | tr -d '\n' | add_pending_secret mail-password-hash)
 fi
 
 # /var's TPM policy admits each PCR 11 policy the PCR key signs. KMS makes each key and keeps its
@@ -86,13 +88,13 @@ create_key_if_missing "$IMAGE_KEY" ECC_NIST_P256 'Signs each published image'
 fetch_public_key() { aws kms get-public-key --key-id "$1" --query PublicKey --output text | base64 -d | openssl pkey -pubin -inform DER; }
 image_public_key=$(fetch_public_key "$IMAGE_KEY")
 
-# Each build instance boots the newest Fedora cloud image of this release, which the launch template
+# Each build instance boots the newest Fedora cloud AMI of this release, which the launch template
 # reads from this parameter. EC2 checks the parameter when the stack creates the launch template.
-# Fedora publishes its images from this account.
-build_image_id=$(aws ec2 describe-images --owners 125523088429 --filters "Name=name,Values=Fedora-Cloud-Base-AmazonEC2.aarch64-$BUILD_FEDORA_RELEASE-*" --query 'sort_by(Images, &CreationDate)[-1].ImageId' --output text)
-existing_build_image_id=$(aws ssm get-parameters --names "${BUILD_PARAMETERS}build-image-id" --query 'Parameters[].Value' --output text)
-[ "$build_image_id" = "$existing_build_image_id" ] || \
-    aws ssm put-parameter --name "${BUILD_PARAMETERS}build-image-id" --type String --data-type aws:ec2:image --overwrite --value "$build_image_id" >/dev/null
+# Fedora publishes its AMIs from this account.
+build_instance_ami_id=$(aws ec2 describe-images --owners 125523088429 --filters "Name=name,Values=Fedora-Cloud-Base-AmazonEC2.aarch64-$BUILD_FEDORA_RELEASE-*" --query 'sort_by(Images, &CreationDate)[-1].ImageId' --output text)
+existing_build_instance_ami_id=$(aws ssm get-parameters --names "${BUILD_PARAMETERS}build-instance-ami-id" --query 'Parameters[].Value' --output text)
+[ "$build_instance_ami_id" = "$existing_build_instance_ami_id" ] || \
+    aws ssm put-parameter --name "${BUILD_PARAMETERS}build-instance-ami-id" --type String --data-type aws:ec2:image --overwrite --value "$build_instance_ami_id" >/dev/null
 
 # reserve-address.sh allocates the address, which outlives the VM and the stack, so DNS keeps
 # pointing at reprovisioned VMs and the address keeps its reverse DNS record.
@@ -112,13 +114,13 @@ stack=bootc
 aws cloudformation deploy --stack-name "$stack" --template-file infrastructure.yaml --capabilities CAPABILITY_NAMED_IAM --no-fail-on-empty-changeset --parameter-overrides \
     "Repository=$REPOSITORY" "WebsiteRepository=$WEBSITE_REPOSITORY" "SecurebootKey=$SECUREBOOT_KEY" "PcrKey=$PCR_KEY" "ImageKey=$IMAGE_KEY" "BuildSecret=$BUILD_SECRET" "EntitlementCertificateSecret=$ENTITLEMENT_CERTIFICATE_SECRET" "BuildParameters=$BUILD_PARAMETERS" "VmParameters=$VM_PARAMETERS" "BuildInstanceType=$BUILD_INSTANCE_TYPE" "BuildInstanceName=$BUILD_INSTANCE_NAME" "BuildLog=$BUILD_LOG" "Subnet=$subnet" "AddressAllocation=$address_allocation" "WireguardPort=$WIREGUARD_PORT"
 fetch_stack_output() { aws cloudformation describe-stacks --stack-name "$stack" --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" --output text; }
-fetch_build_parameter_name() { aws ssm get-parameters --names "$BUILD_PARAMETERS$1" --query 'Parameters[].Name' --output text; }
+list_build_parameter() { aws ssm get-parameters --names "$BUILD_PARAMETERS$1" --query 'Parameters[].Name' --output text; }
 
 # Each build instance applies tailscale/policy.json through a Tailscale federated credential, which
 # trusts only the tokens AWS signs for its role. The client ID and audience are public, so both are
 # String parameters. A credential that a failed run left without its parameter is deleted first.
 federated_credential_description='bootc-build instance role'
-tailscale_policy_client_id_listed=$(fetch_build_parameter_name tailscale-policy-client-id)
+tailscale_policy_client_id_listed=$(list_build_parameter tailscale-policy-client-id)
 this_machine=$(fetch_this_machine)
 operator_tag_missing=$(printf '%s' "$this_machine" | jq .operator_tag_missing)
 if [ -z "$tailscale_policy_client_id_listed" ] || [ "$operator_tag_missing" = true ] || [ -z "$vm_instance_id" ]; then
@@ -156,50 +158,50 @@ if [ "$operator_tag_missing" = true ]; then
         call_tailscale_api -H 'Content-Type: application/json' --data @- "$tailscale_api_base/device/$device_id/tags" >/dev/null
 fi
 
-fetch_seed_image() { aws ec2 describe-images --owners self --filters "Name=name,Values=$SEED_IMAGE" --query "Images[].$1" --output text; }
+fetch_vm_ami() { aws ec2 describe-images --owners self --filters "Name=name,Values=$VM_AMI" --query "Images[].$1" --output text; }
 # The firmware matches the certificate itself, so it only has to carry the Secure Boot key's public
-# half, and openssl signs it with a key this run makes and discards. A seed image built under an
+# half, and openssl signs it with a key this run makes and discards. A VM AMI built under an
 # earlier certificate would give a new VM firmware that rejects the new signatures.
-secureboot_certificate_listed=$(fetch_build_parameter_name secureboot-certificate)
+secureboot_certificate_listed=$(list_build_parameter secureboot-certificate)
 [ -n "$secureboot_certificate_listed" ] || \
     {
         secureboot_public_key=$(fetch_public_key "$SECUREBOOT_KEY")
         secureboot_certificate=$(openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 2>/dev/null | \
             openssl x509 -new -force_pubkey <(printf '%s' "$secureboot_public_key") -key /dev/stdin -subj "/CN=$REPOSITORY Secure Boot" -days 36500 2>/dev/null)
-        stale_seed_image_id=$(fetch_seed_image ImageId)
-        [ -z "$stale_seed_image_id" ] || \
-            aws ec2 deregister-image --image-id "$stale_seed_image_id" --delete-associated-snapshots >/dev/null
+        stale_vm_ami_id=$(fetch_vm_ami ImageId)
+        [ -z "$stale_vm_ami_id" ] || \
+            aws ec2 deregister-image --image-id "$stale_vm_ami_id" --delete-associated-snapshots >/dev/null
         aws ssm put-parameter --name "${BUILD_PARAMETERS}secureboot-certificate" --type String --value "$secureboot_certificate" >/dev/null
     }
 
 # Each build clones main from this repository's and the website's CodeCommit repositories. The first
 # run pushes main from each checkout, and each push starts a build. A newer build ends an older one,
-# and a run that finds this repository's branch and no seed image starts one here.
+# and a run that finds this repository's branch and no VM AMI starts one here.
 codecommit_git=(git -c credential.helper='!aws codecommit credential-helper $@' -c credential.UseHttpPath=true)
 aws codecommit get-branch --repository-name "$WEBSITE_REPOSITORY" --branch-name main >/dev/null 2>&1 || \
     {
         website_clone_url=$(fetch_stack_output WebsiteSourceCloneUrl)
         "${codecommit_git[@]}" -C /website push "$website_clone_url" main
     }
-seed_image_state=$(fetch_seed_image State)
+vm_ami_state=$(fetch_vm_ami State)
 main_branch_listed=$(aws codecommit get-branch --repository-name "$REPOSITORY" --branch-name main --query branch.branchName --output text 2>/dev/null) || \
     {
         source_clone_url=$(fetch_stack_output SourceCloneUrl)
         "${codecommit_git[@]}" push "$source_clone_url" main
     }
-[ -z "$main_branch_listed" ] || [ -n "$seed_image_state" ] || \
+[ -z "$main_branch_listed" ] || [ -n "$vm_ami_state" ] || \
     {
         build_start_arn=$(fetch_stack_output BuildStartArn)
         aws stepfunctions start-execution --state-machine-arn "$build_start_arn" >/dev/null
     }
-# EC2 creates an instance only from an available image. A build that ends without one has failed.
-until [ "$seed_image_state" = available ]; do
+# EC2 creates an instance only from an available AMI. A build that ends without one has failed.
+until [ "$vm_ami_state" = available ]; do
     sleep 60
-    seed_image_state=$(fetch_seed_image State)
+    vm_ami_state=$(fetch_vm_ami State)
     build_instances=$(aws ec2 describe-instances --filters "Name=tag:Name,Values=$BUILD_INSTANCE_NAME" Name=instance-state-name,Values=pending,running --query 'Reservations[].Instances[].InstanceId' --output text)
-    if [ -z "$seed_image_state" ] && [ -z "$build_instances" ]; then
+    if [ -z "$vm_ami_state" ] && [ -z "$build_instances" ]; then
         account_id=$(aws sts get-caller-identity --query Account --output text)
-        echo "The build ended without a seed image. Read its log in s3://bootc-build-logs-$account_id/$BUILD_LOG." >&2
+        echo "The build ended without a VM AMI. Read its log in s3://bootc-build-logs-$account_id/$BUILD_LOG." >&2
         exit 1
     fi
 done
@@ -208,19 +210,19 @@ done
 # holds, so Parameter Store records the SHA-256 of the one it was sent, as it records the public
 # halves of the keys.
 relay_password_sha256=$(printf '%s' "$RELAY_PASSWORD" | sha256sum | head -c 64)
-existing_relay_password_sha256=$(read_existing relay-password-sha256)
+existing_relay_password_sha256=$(read_existing_parameter relay-password-sha256)
 [ "$relay_password_sha256" = "$existing_relay_password_sha256" ] || \
-    inbox=$(printf '%s' "$RELAY_PASSWORD" | add_to_inbox relay-password)
+    pending_secrets=$(printf '%s' "$RELAY_PASSWORD" | add_pending_secret relay-password)
 
 # Stalwart signs Web Push notifications with this Web Push key, and clients' push subscriptions name
 # its public half, so the VM keeps its key while Parameter Store records the public half. openssl
 # writes each new key only to stdout.
-web_push_public_key=$(read_existing web-push-public-key)
+web_push_public_key=$(read_existing_parameter web-push-public-key)
 [ -n "$web_push_public_key" ] || \
     {
         web_push_key=$(openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 2>/dev/null)
         web_push_public_key=$(printf '%s' "$web_push_key" | openssl pkey -pubout)
-        inbox=$(printf '%s' "$web_push_key" | add_to_inbox web-push-key)
+        pending_secrets=$(printf '%s' "$web_push_key" | add_pending_secret web-push-key)
     }
 
 # Senders fetch the policy again whenever the _mta-sts TXT id changes, so the id hashes the policy.
@@ -256,12 +258,12 @@ queue_spf() {
 # check the signature against the key's public half in DNS, which Parameter Store records as it does
 # the Web Push key's.
 dkim_selector=bootc
-dkim_public_key=$(read_existing dkim-public-key)
+dkim_public_key=$(read_existing_parameter dkim-public-key)
 [ -n "$dkim_public_key" ] || \
     {
         dkim_key=$(openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 2>/dev/null)
         dkim_public_key=$(printf '%s' "$dkim_key" | openssl pkey -pubout -outform DER | base64 -w0)
-        inbox=$(printf '%s' "$dkim_key" | add_to_inbox dkim-key)
+        pending_secrets=$(printf '%s' "$dkim_key" | add_pending_secret dkim-key)
     }
 # One TXT string holds at most 255 characters, and the record exceeds that.
 dkim_records=$(jq -nc --arg record "v=DKIM1; k=rsa; p=$dkim_public_key" '[[$record | scan(".{1,255}") | "\"\(.)\""] | join(" ")]')
@@ -321,15 +323,16 @@ set_parameter tailnet String "$TAILNET"
 set_parameter dkim-selector String "$dkim_selector"
 set_parameter dkim-public-key String "$dkim_public_key"
 set_parameter web-push-public-key String "$web_push_public_key"
-[ "$inbox" = '{}' ] || \
-    set_parameter inbox SecureString "$inbox"
-# The hash follows the inbox, so a run that stops between the two writes sends the password again.
+[ "$pending_secrets" = '{}' ] || \
+    set_parameter pending-secrets SecureString "$pending_secrets"
+# The hash follows pending-secrets, so a run that stops between the two writes sends the password
+# again.
 set_parameter relay-password-sha256 String "$relay_password_sha256"
 if [ -n "$vm_instance_id" ]; then
     # The VM reads its parameters at boot, so it boots again when a value changed. It also boots
-    # again while the inbox holds secrets, because remove-boot-secrets.sh removes the inbox once any
-    # boot finished, and only a boot after this run's write has stored this inbox.
-    if [ -n "$parameters_changed" ] || [ "$inbox" != '{}' ]; then
+    # again while secrets are pending, because remove-boot-secrets.sh removes pending-secrets once
+    # any boot finished, and only a boot after this run's write has stored these pending secrets.
+    if [ -n "$parameters_changed" ] || [ "$pending_secrets" != '{}' ]; then
         aws ec2 reboot-instances --instance-ids "$vm_instance_id"
     fi
 else
@@ -351,11 +354,11 @@ else
         tailscale_auth_key=$(tailscale lock sign file:<(printf '%s' "$tailscale_auth_key"))
     fi
     set_parameter tailscale-auth-key SecureString "$tailscale_auth_key"
-    # The firmware keys come from the seed image, and the role lets the VM read its parameters and
+    # The firmware keys come from the VM AMI, and the role lets the VM read its parameters and
     # pull its image. A hop limit of 1 keeps the role's credentials from anything behind a NAT.
-    seed_image_id=$(fetch_seed_image ImageId)
+    vm_ami_id=$(fetch_vm_ami ImageId)
     vm_interface=$(fetch_stack_output VmInterface)
-    aws ec2 run-instances --image-id "$seed_image_id" --instance-type "$VM_INSTANCE_TYPE" --network-interfaces "NetworkInterfaceId=$vm_interface,DeviceIndex=0" --iam-instance-profile Name=bootc-vm \
+    aws ec2 run-instances --image-id "$vm_ami_id" --instance-type "$VM_INSTANCE_TYPE" --network-interfaces "NetworkInterfaceId=$vm_interface,DeviceIndex=0" --iam-instance-profile Name=bootc-vm \
         --block-device-mappings "DeviceName=/dev/sda1,Ebs={VolumeSize=$VM_DISK_SIZE,VolumeType=gp3}" --metadata-options HttpTokens=required,HttpPutResponseHopLimit=1 --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=$vm_name}]" >/dev/null
 fi
 

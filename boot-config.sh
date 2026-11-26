@@ -4,13 +4,13 @@ set -euo pipefail
 fetch=/opt/scripts/fetch-parameter.sh
 # An empty key lists the VM's Parameter Store keys.
 keys=$($fetch '')
-# remove-boot-secrets.sh removes the inbox from Parameter Store once a boot finished, so each boot
-# stores what the inbox carries and then reads only the secret store. A key the inbox lacks keeps its stored
-# value, and the sync makes the stored values outlast a reboot.
-if grep -qx inbox <<< "$keys"; then
-    inbox=$($fetch inbox)
-    jq -r 'keys[]' <<< "$inbox" | while read -r key; do
-        jq -j --arg key "$key" '.[$key]' <<< "$inbox" > "$STATE_DIRECTORY/$key.new"
+# remove-boot-secrets.sh removes pending-secrets from Parameter Store once a boot finished, so each
+# boot stores the pending secrets and then reads only the secret store. A key that pending-secrets
+# lacks keeps its stored value, and the sync makes the stored values outlast a reboot.
+if grep -qx pending-secrets <<< "$keys"; then
+    pending_secrets=$($fetch pending-secrets)
+    jq -r 'keys[]' <<< "$pending_secrets" | while read -r key; do
+        jq -j --arg key "$key" '.[$key]' <<< "$pending_secrets" > "$STATE_DIRECTORY/$key.new"
         mv "$STATE_DIRECTORY/$key.new" "$STATE_DIRECTORY/$key"
     done
     sync -f "$STATE_DIRECTORY"

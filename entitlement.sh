@@ -6,7 +6,7 @@ set -euo pipefail
 # Secrets Manager holds no certificate that is still valid.
 source "$PWD/build.env"
 source "$PWD/region.sh"
-source "$PWD/desec.sh"
+source "$PWD/read-secret.sh"
 source "$PWD/fetch-secret.sh"
 
 # Every later step needs AWS credentials, which ~/.aws keeps, so a machine without them signs in here.

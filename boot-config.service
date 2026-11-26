@@ -11,7 +11,7 @@ ExecStart=/opt/scripts/boot-config.sh
 RemainAfterExit=yes
 RuntimeDirectory=boot-postgresql
 RuntimeDirectoryMode=0750
-# The secret store, which holds what the inbox delivers (see boot-config.sh).
+# The secret store, which holds the pending secrets each boot stores (see boot-config.sh).
 StateDirectory=boot-config
 StateDirectoryMode=0700
 

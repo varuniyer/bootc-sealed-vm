@@ -12,13 +12,6 @@ strip_zone() { local subname=${1%"$2"}; printf '%s' "${subname%.}"; }
 # format_rrset prints one RRset for write_rrsets: a subname, a type, and the records as a JSON array.
 format_rrset() { jq -nc --arg subname "$1" --arg type "$2" --argjson records "$3" '{$subname, $type, ttl: 3600, $records}'; }
 
-# Secrets stay unexported shell variables and reach other processes only through
-# stdin or /dev/fd paths, never argv, the environment, or local disk.
-read_secret() { read -rsp "$1: " "$2"; echo >&2; }
-
-# Prints this machine's tailnet device ID and tags, and whether it lacks tag:operator.
-fetch_this_machine() { tailscale status --json | jq -c '.Self | {id: .ID, tags: (.Tags // [])} | .operator_tag_missing = (.tags | index("tag:operator") == null)'; }
-
 # $1 names the run's token, which holds none of deSEC's account permissions. The token gets its
 # default-deny policy before any write, since deSEC lets a token without policies write every RRset.
 # The sourcing script sets no EXIT trap, so this one, which deletes the token, holds.

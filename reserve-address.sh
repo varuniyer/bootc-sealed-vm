@@ -10,6 +10,7 @@ set -euo pipefail
     exec "$PWD/operator-tools.sh" "./${0##*/}" "$@"
 name=$1
 source "$PWD/region.sh"
+source "$PWD/read-secret.sh"
 source "$PWD/desec.sh"
 
 address_name=bootc-ip
