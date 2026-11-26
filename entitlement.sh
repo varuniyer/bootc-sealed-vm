@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# provisioner.sh runs this in the aws-cli stage's image. It writes the entitlement certificate and
-# key to /entitlement for the provisioner stage's dnf step, and first registers with Red Hat while
+# operator-tools.sh runs this in the aws-cli stage's image. It writes the entitlement certificate and
+# key to /entitlement for the operator-tools stage's dnf step, and first registers with Red Hat while
 # Secrets Manager holds no certificate that is still valid.
 source "$PWD/build.env"
 source "$PWD/region.sh"

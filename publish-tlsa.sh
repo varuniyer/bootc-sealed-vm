@@ -5,9 +5,9 @@ set -euo pipefail
 # Stalwart serves once Let's Encrypt's chain validates it for mail.<DOMAIN>. A failed check changes
 # nothing, because a record that pins the current key must survive a passing network fault.
 
-# provisioner.sh runs this script in the provisioner image, which supplies every tool it uses.
-[ -n "${PROVISIONER:-}" ] || \
-    exec "$PWD/provisioner.sh" "./${0##*/}" "$@"
+# operator-tools.sh runs this script in the operator-tools image, which supplies every tool it uses.
+[ -n "${OPERATOR_TOOLS:-}" ] || \
+    exec "$PWD/operator-tools.sh" "./${0##*/}" "$@"
 source "$PWD/build.env"
 source "$PWD/region.sh"
 source "$PWD/desec.sh"
@@ -22,7 +22,7 @@ fi
 # provision.sh sets both values among the VM's parameters.
 domain=$(aws ssm get-parameter --name "${VM_PARAMETERS}domain" --query Parameter.Value --output text)
 tailnet=$(aws ssm get-parameter --name "${VM_PARAMETERS}tailnet" --query Parameter.Value --output text)
-desec_create_token publish-tlsa
+create_desec_token publish-tlsa
 
 if ! spki_hash=$(timeout 30 openssl s_client -starttls smtp -connect "$REPOSITORY.$tailnet:25" -servername "mail.$domain" -verify_hostname "mail.$domain" -verify_return_error </dev/null 2>/dev/null | \
         openssl x509 -pubkey -noout 2>/dev/null | openssl pkey -pubin -outform DER 2>/dev/null | sha256sum | cut -d' ' -f1); then
@@ -32,8 +32,8 @@ fi
 
 record="3 1 1 $spki_hash"
 name=_25._tcp.mail.$domain
-zone=$(desec_fetch_zone "$name")
-subname=$(desec_subname "$name" "$zone")
-rrset=$(desec_rrset "$subname" TLSA "[\"$record\"]")
-desec_apply "$zone" "[$rrset]"
+zone=$(fetch_zone "$name")
+subname=$(strip_zone "$name" "$zone")
+rrset=$(format_rrset "$subname" TLSA "[\"$record\"]")
+write_rrsets "$zone" "[$rrset]"
 echo "Set $name to $record." >&2

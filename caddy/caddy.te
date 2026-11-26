@@ -13,7 +13,7 @@ files_config_file(caddy_etc_t)
 type caddy_var_lib_t;
 files_type(caddy_var_lib_t)
 
-# boot-root.sh renders caddy.service's environment and the MTA-STS policy under /run/caddy.
+# boot-config.sh renders caddy.service's environment and the MTA-STS policy under /run/caddy.
 type caddy_runtime_t;
 files_pid_file(caddy_runtime_t)
 

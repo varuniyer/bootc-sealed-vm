@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# $PGDATA appears only at the final rename, so boot-root.sh's first-boot test stays true after a failed attempt.
+# $PGDATA appears only at the final rename, so boot-config.sh's first-boot test stays true after a failed attempt.
 staging=$PGDATA.staging
 rm -rf "$staging"
 initdb -D "$staging"

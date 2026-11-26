@@ -1,7 +1,7 @@
 [Unit]
 Description=First-boot PostgreSQL bootstrap
-Requires=boot-root.service
-After=boot-root.service
+Requires=boot-config.service
+After=boot-config.service
 
 [Service]
 Type=oneshot

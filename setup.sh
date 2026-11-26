@@ -63,13 +63,13 @@ find /usr /etc /opt \( -type f -o -type d \) -perm /022 -exec chmod go-w {} +
 chown root:caddy /etc/caddy/Caddyfile
 chmod 0640 /etc/caddy/Caddyfile
 
-# boot-root.service runs as Group=pghash, so the hash file it writes
+# boot-config.service runs as Group=pghash, so the hash file it writes
 # belongs to pghash, and postgres reads it as a member.
 groupadd -r pghash
 usermod -aG pghash postgres
 
 # Every shipped unit links the shared sandbox.
-for unit in boot-root modules-disabled boot-tailscale boot-postgresql tailscaled caddy postgresql stalwart-apply stalwart; do
+for unit in boot-config modules-disabled boot-tailscale boot-postgresql tailscaled caddy postgresql stalwart-apply stalwart; do
     mkdir -p /usr/lib/systemd/system/$unit.service.d
     ln -s ../../sandbox.conf /usr/lib/systemd/system/$unit.service.d/sandbox.conf
 done
@@ -79,7 +79,7 @@ done
 for unit in stalwart-apply stalwart; do
     ln -s ../../run-as-stalwart.conf /usr/lib/systemd/system/$unit.service.d/run-as-stalwart.conf
 done
-for unit in boot-root boot-postgresql postgresql; do
+for unit in boot-config boot-postgresql postgresql; do
     ln -s ../../pgdata.conf /usr/lib/systemd/system/$unit.service.d/pgdata.conf
 done
 

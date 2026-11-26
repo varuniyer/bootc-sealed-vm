@@ -1,4 +1,4 @@
-# boot-root.sh renders Stalwart's settings from this filter on every boot, and stalwart-apply.sh applies
+# boot-config.sh renders Stalwart's settings from this filter on every boot, and stalwart-apply.sh applies
 # them. Each top-level object is one stalwart-cli apply operation, listed parents first.
 ($mail_user + "@" + $domain) as $mailbox_address |
 {"@type": "upsert", "object": "AcmeProvider", "matchOn": ["description"], "value": {"acme": {

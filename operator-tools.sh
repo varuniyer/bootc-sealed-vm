@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Runs a command, or a shell, in the provisioner image, which every run builds from Red Hat's signed
-# base image and signed packages. This machine supplies only bash, Podman, its tailscaled, ~/.aws, and
-# for provision.sh the website's checkout, whose path arrives in WEBSITE_CHECKOUT.
+# Runs a command, or a shell, in the operator-tools image, which every run builds from Red Hat's
+# signed base image and signed packages. This machine supplies only bash, Podman, its tailscaled,
+# ~/.aws, and for provision.sh the website's checkout, whose path arrives in WEBSITE_CHECKOUT.
 
 podman login --get-login registry.redhat.io >/dev/null 2>&1 || \
     {
@@ -25,11 +25,11 @@ run=(podman run --rm -it --pull=never --log-driver=none --network=host --securit
 # tmpfs mounts hold the registration it makes while Secrets Manager holds no valid certificate.
 "${build[@]}" --target aws-cli -t localhost/aws-cli . >/dev/null
 "${run[@]}" -e SMDEV_CONTAINER_OFF=1 --tmpfs /etc/pki/consumer --tmpfs /etc/pki/entitlement -v "$run_dir/entitlement:/entitlement" localhost/aws-cli ./entitlement.sh
-"${build[@]}" --target provisioner -t localhost/provisioner --secret "id=entitlement_certificate,src=$run_dir/entitlement/certificate" --secret "id=entitlement_key,src=$run_dir/entitlement/key" . >/dev/null
+"${build[@]}" --target operator-tools -t localhost/operator-tools --secret "id=entitlement_certificate,src=$run_dir/entitlement/certificate" --secret "id=entitlement_key,src=$run_dir/entitlement/key" . >/dev/null
 
 # The container shares this machine's network, so it reaches the tailnet, and the tailscale CLI in it
 # drives this machine's tailscaled through the socket. /tmp holds the PostgreSQL hasher's server.
-# PROVISIONER marks the inside for the scripts.
-website=()
-[ -z "${WEBSITE_CHECKOUT:-}" ] || website=(-v "$WEBSITE_CHECKOUT:/website:ro")
-"${run[@]}" --tmpfs /tmp -e PROVISIONER=1 -v /run/tailscale/tailscaled.sock:/run/tailscale/tailscaled.sock "${website[@]}" localhost/provisioner "${@:-bash}"
+# OPERATOR_TOOLS marks the inside for the scripts.
+website_mount=()
+[ -z "${WEBSITE_CHECKOUT:-}" ] || website_mount=(-v "$WEBSITE_CHECKOUT:/website:ro")
+"${run[@]}" --tmpfs /tmp -e OPERATOR_TOOLS=1 -v /run/tailscale/tailscaled.sock:/run/tailscale/tailscaled.sock "${website_mount[@]}" localhost/operator-tools "${@:-bash}"

@@ -22,17 +22,17 @@ COPY seal.sh /seal.sh
 
 
 # install.sh installs AWS's latest CLI release, which it accepts only under AWS's signature.
-# provisioner.sh builds this stage as its own image, without an entitlement, and runs entitlement.sh
-# in it, which reads the entitlement the provisioner stage's dnf step needs.
+# operator-tools.sh builds this stage as its own image, without an entitlement, and runs entitlement.sh
+# in it, which reads the entitlement the operator-tools stage's dnf step needs.
 FROM base AS aws-cli
 COPY aws-cli/install.sh aws-cli/aws-cli.pub /
 RUN bash /install.sh
 
 
-# provisioner.sh tags the aws-cli stage localhost/aws-cli, builds this stage alone, and runs each
+# operator-tools.sh tags the aws-cli stage localhost/aws-cli, builds this stage alone, and runs each
 # operator script in it, so the scripts take every tool from signed sources. initdb and pg_ctl live
 # in PGDG's directory.
-FROM localhost/aws-cli AS provisioner
+FROM localhost/aws-cli AS operator-tools
 COPY tailscale/tailscale.repo postgresql/pgdg.repo /etc/yum.repos.d/
 COPY tailscale/RPM-GPG-KEY-tailscale postgresql/PGDG-RPM-GPG-KEY-AARCH64-RHEL /etc/pki/rpm-gpg/
 RUN --mount=type=bind,source=rhel.repo,target=/etc/yum.repos.d/rhel.repo --mount=type=secret,id=entitlement_certificate --mount=type=secret,id=entitlement_key dnf install -y --setopt=install_weak_deps=False bind-utils git-core httpd-tools postgresql17-server tailscale
@@ -96,9 +96,9 @@ COPY containers/sigpolicy.toml /usr/lib/bootc/install/sigpolicy.toml
 COPY postgresql/postgresql.conf postgresql/pg_hba.conf /etc/postgresql/
 COPY postgresql/bootstrap.sql /usr/share/boot-postgresql/
 
-COPY setup.sh boot-root.sh aws-api.sh fetch-parameter.sh ecr-login.sh var/repart-var.sh tailscale/boot-tailscale.sh postgresql/boot-postgresql.sh postgresql/bootstrap.sh stalwart/stalwart-apply.sh /opt/scripts/
-COPY boot-root.service modules-disabled.service tailscale/boot-tailscale.service postgresql/boot-postgresql.service postgresql/postgresql.service caddy/caddy.service caddy/caddy.socket stalwart/stalwart.service stalwart/stalwart-apply.service /usr/lib/systemd/system/
-COPY boot-root-capabilities.conf /usr/lib/systemd/system/boot-root.service.d/zz-capabilities.conf
+COPY setup.sh boot-config.sh aws-api.sh fetch-parameter.sh ecr-login.sh var/repart-var.sh tailscale/boot-tailscale.sh postgresql/boot-postgresql.sh postgresql/bootstrap.sh stalwart/stalwart-apply.sh /opt/scripts/
+COPY boot-config.service modules-disabled.service tailscale/boot-tailscale.service postgresql/boot-postgresql.service postgresql/postgresql.service caddy/caddy.service caddy/caddy.socket stalwart/stalwart.service stalwart/stalwart-apply.service /usr/lib/systemd/system/
+COPY boot-config-capabilities.conf /usr/lib/systemd/system/boot-config.service.d/zz-capabilities.conf
 COPY stalwart/stalwart-capabilities.conf /usr/lib/systemd/system/stalwart.service.d/zz-capabilities.conf
 # The Tailscale RPM owns /usr/lib/systemd/system/tailscaled.service, and a unit in /etc/systemd/system replaces it.
 COPY tailscale/tailscaled.service /etc/systemd/system/tailscaled.service

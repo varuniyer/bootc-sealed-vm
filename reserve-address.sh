@@ -5,9 +5,9 @@ set -euo pipefail
 # runs, which stops while the address is missing. AWS sets a reverse record only once the name's A
 # record points at the address, so deSEC gets that record first.
 
-# provisioner.sh runs this script in the provisioner image, which supplies every tool it uses.
-[ -n "${PROVISIONER:-}" ] || \
-    exec "$PWD/provisioner.sh" "./${0##*/}" "$@"
+# operator-tools.sh runs this script in the operator-tools image, which supplies every tool it uses.
+[ -n "${OPERATOR_TOOLS:-}" ] || \
+    exec "$PWD/operator-tools.sh" "./${0##*/}" "$@"
 name=$1
 source "$PWD/region.sh"
 source "$PWD/desec.sh"
@@ -18,11 +18,11 @@ address_allocation=$(aws ec2 describe-addresses --filters "Name=tag:Name,Values=
     address_allocation=$(aws ec2 allocate-address --tag-specifications "ResourceType=elastic-ip,Tags=[{Key=Name,Value=$address_name}]" --query AllocationId --output text)
 ip=$(aws ec2 describe-addresses --allocation-ids "$address_allocation" --query 'Addresses[0].PublicIp' --output text)
 
-desec_create_token reserve-address
-zone=$(desec_fetch_zone "$name")
-subname=$(desec_subname "$name" "$zone")
-rrset=$(desec_rrset "$subname" A "[\"$ip\"]")
-desec_apply "$zone" "[$rrset]"
+create_desec_token reserve-address
+zone=$(fetch_zone "$name")
+subname=$(strip_zone "$name" "$zone")
+rrset=$(format_rrset "$subname" A "[\"$ip\"]")
+write_rrsets "$zone" "[$rrset]"
 
 # A resolver that asks before the zone's nameservers publish the A record caches the earlier answer
 # for up to an hour, and AWS's resolver asks as soon as the request arrives.

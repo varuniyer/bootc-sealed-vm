@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Removes the secrets the VM reads only at boot from Parameter Store: the inbox, which boot-root.sh
+# Removes the secrets the VM reads only at boot from Parameter Store: the inbox, which boot-config.sh
 # stores on /var, and the first boot's Tailscale auth key and PostgreSQL hash. PostgreSQL answers over
 # the tailnet once some boot finished, so provision.sh reboots the VM whenever the inbox holds secrets.
 source "$PWD/build.env"

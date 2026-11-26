@@ -12,13 +12,13 @@ MAIL_USER=varun
 MAIL_ALIAS_DOMAINS="varuniyer.info"
 TAILNET=tailbc280c.ts.net
 
-# provisioner.sh runs this script in the provisioner image, which supplies every tool it uses. $1 is
-# the website's checkout, which provisioner.sh mounts read-only at /website.
-[ -n "${PROVISIONER:-}" ] || \
+# operator-tools.sh runs this script in the operator-tools image, which supplies every tool it uses.
+# $1 is the website's checkout, which operator-tools.sh mounts read-only at /website.
+[ -n "${OPERATOR_TOOLS:-}" ] || \
     {
         WEBSITE_CHECKOUT=$(realpath -e "${1:?Pass the path to the website checkout.}")
         export WEBSITE_CHECKOUT
-        exec "$PWD/provisioner.sh" "./${0##*/}"
+        exec "$PWD/operator-tools.sh" "./${0##*/}"
     }
 
 source "$PWD/build.env"
@@ -43,25 +43,25 @@ if [ -z "$vm_instance_id" ] && [ "$existing_parameters" != '{}' ]; then
     existing_parameters='{}'
 fi
 read_existing() { printf '%s' "$existing_parameters" | jq -r --arg key "$1" '.[$key] // empty'; }
-# The inbox carries each secret the VM lacks the current value of, and boot-root.sh stores what it
+# The inbox carries each secret the VM lacks the current value of, and boot-config.sh stores what it
 # carries on /var. It starts from any inbox a stopped run left in Parameter Store, so that run's
 # secrets still reach the VM.
 inbox=$(read_existing inbox)
 [ -n "$inbox" ] || \
     inbox='{}'
-# inbox_add prints the inbox with the secret on its stdin added under key $1. The inbox reaches jq
+# add_to_inbox prints the inbox with the secret on its stdin added under key $1. The inbox reaches jq
 # through /dev/fd, so both stay outside argv.
-inbox_add() { jq -Rsc --arg key "$1" --slurpfile inbox <(printf '%s' "$inbox") '$inbox[0] + {($key): .}'; }
+add_to_inbox() { jq -Rsc --arg key "$1" --slurpfile inbox <(printf '%s' "$inbox") '$inbox[0] + {($key): .}'; }
 read_secret "Mail password for $MAIL_USER@$DOMAIN" MAIL_PASSWORD
 read_secret "Relay password of the Forward Email alias $MAIL_USER@$DOMAIN" RELAY_PASSWORD
-desec_create_token provision
+create_desec_token provision
 
 # Stalwart stores a bcrypt hash as given, so only the hash after htpasswd's "user:" prefix reaches
 # the VM. bcrypt salts every hash, so the run hashes the password only when the existing VM's Stalwart
 # rejects it. The JMAP session endpoint answers only a signed-in client.
 if [ -z "$vm_instance_id" ] || ! printf '%s:%s' "$MAIL_USER" "$MAIL_PASSWORD" | jq -Rrs '"user = " + @json' | \
         curl -sfL --max-time 30 -o /dev/null -K - "https://$REPOSITORY.$TAILNET/.well-known/jmap"; then
-    inbox=$(printf '%s' "$MAIL_PASSWORD" | htpasswd -niBC 12 "$MAIL_USER" | cut -d: -f2- | tr -d '\n' | inbox_add mail-password-hash)
+    inbox=$(printf '%s' "$MAIL_PASSWORD" | htpasswd -niBC 12 "$MAIL_USER" | cut -d: -f2- | tr -d '\n' | add_to_inbox mail-password-hash)
 fi
 
 # /var's TPM policy admits each PCR 11 policy the PCR key signs. KMS makes each key and keeps its
@@ -210,7 +210,7 @@ done
 relay_password_sha256=$(printf '%s' "$RELAY_PASSWORD" | sha256sum | head -c 64)
 existing_relay_password_sha256=$(read_existing relay-password-sha256)
 [ "$relay_password_sha256" = "$existing_relay_password_sha256" ] || \
-    inbox=$(printf '%s' "$RELAY_PASSWORD" | inbox_add relay-password)
+    inbox=$(printf '%s' "$RELAY_PASSWORD" | add_to_inbox relay-password)
 
 # Stalwart signs Web Push notifications with this Web Push key, and clients' push subscriptions name
 # its public half, so the VM keeps its key while Parameter Store records the public half. openssl
@@ -220,7 +220,7 @@ web_push_public_key=$(read_existing web-push-public-key)
     {
         web_push_key=$(openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 2>/dev/null)
         web_push_public_key=$(printf '%s' "$web_push_key" | openssl pkey -pubout)
-        inbox=$(printf '%s' "$web_push_key" | inbox_add web-push-key)
+        inbox=$(printf '%s' "$web_push_key" | add_to_inbox web-push-key)
     }
 
 # Senders fetch the policy again whenever the _mta-sts TXT id changes, so the id hashes the policy.
@@ -229,24 +229,24 @@ mta_sts_id=$(printf '%s' "$mta_sts_policy" | sha256sum | head -c 20)
 
 ip=$(aws ec2 describe-addresses --allocation-ids "$address_allocation" --query 'Addresses[0].PublicIp' --output text)
 
-# queue_rrset queues an RRset for its zone's one PATCH (see desec_apply): a name, a type, and the
+# queue_rrset queues an RRset for its zone's one PATCH (see write_rrsets): a name, a type, and the
 # records as a JSON array. queue_zone_rrset takes the name's zone first, from a caller that holds it.
 declare -A zone_rrsets
 queue_zone_rrset() {
     local subname
-    subname=$(desec_subname "$2" "$1")
-    zone_rrsets[$1]+=$(desec_rrset "$subname" "$3" "$4")$'\n'
+    subname=$(strip_zone "$2" "$1")
+    zone_rrsets[$1]+=$(format_rrset "$subname" "$3" "$4")$'\n'
 }
 queue_rrset() {
     local zone
-    zone=$(desec_fetch_zone "$1")
+    zone=$(fetch_zone "$1")
     queue_zone_rrset "$zone" "$@"
 }
 # An apex TXT set also holds other services' verification values, so only its SPF value changes.
 queue_spf() {
     local zone subname records
-    zone=$(desec_fetch_zone "$1")
-    subname=$(desec_subname "$1" "$zone")
+    zone=$(fetch_zone "$1")
+    subname=$(strip_zone "$1" "$zone")
     records=$(call_desec "$desec_api/domains/$zone/rrsets/?subname=$subname&type=TXT" | \
         jq -c --arg spf "\"$2\"" '[(.[0].records // [])[] | select(startswith("\"v=spf1") | not)] + [$spf]')
     queue_zone_rrset "$zone" "$1" TXT "$records"
@@ -261,7 +261,7 @@ dkim_public_key=$(read_existing dkim-public-key)
     {
         dkim_key=$(openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 2>/dev/null)
         dkim_public_key=$(printf '%s' "$dkim_key" | openssl pkey -pubout -outform DER | base64 -w0)
-        inbox=$(printf '%s' "$dkim_key" | inbox_add dkim-key)
+        inbox=$(printf '%s' "$dkim_key" | add_to_inbox dkim-key)
     }
 # One TXT string holds at most 255 characters, and the record exceeds that.
 dkim_records=$(jq -nc --arg record "v=DKIM1; k=rsa; p=$dkim_public_key" '[[$record | scan(".{1,255}") | "\"\(.)\""] | join(" ")]')
@@ -299,7 +299,7 @@ if [ -z "$vm_instance_id" ]; then
 fi
 for zone in "${!zone_rrsets[@]}"; do
     rrsets=$(printf '%s' "${zone_rrsets[$zone]}" | jq -sc .)
-    desec_apply "$zone" "$rrsets"
+    write_rrsets "$zone" "$rrsets"
 done
 
 # Every boot reads the settings, and the public halves name the keys the VM holds. A parameter is
@@ -333,9 +333,9 @@ if [ -n "$vm_instance_id" ]; then
         aws ec2 reboot-instances --instance-ids "$vm_instance_id"
     fi
 else
-    # The provisioner's PostgreSQL hashes the password, which it reads from stdin, and the AWS CLI
-    # reads the hash from the pipe on /dev/fd/0. initdb refuses to run as root, so the hasher runs
-    # as postgres.
+    # The operator-tools image's PostgreSQL hashes the password, which it reads from stdin, and the
+    # AWS CLI reads the hash from the pipe on /dev/fd/0. initdb refuses to run as root, so the hasher
+    # runs as postgres.
     printf '%s' "$POSTGRESQL_EXPERIMENTS_PASSWORD" | runuser -u postgres -- /hash-postgresql-password/run.sh | tr -d '\n' | \
         aws ssm put-parameter --name "${VM_PARAMETERS}postgresql-experiments-hash" --type SecureString --value file:///dev/fd/0 >/dev/null
     # The first boot logs in with this key, and every later boot reuses the node key in tailscaled's

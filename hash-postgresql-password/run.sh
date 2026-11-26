@@ -2,7 +2,7 @@
 set -eu
 
 # Reads the plaintext password from stdin and writes its SCRAM-SHA-256 hash to stdout. The server
-# listens only on a socket in the provisioner's /tmp, a tmpfs, and ends with the script.
+# listens only on a socket in the operator-tools container's /tmp, a tmpfs, and ends with the script.
 
 PGDATA=$(mktemp -d)
 export PGDATA PGHOST=/tmp

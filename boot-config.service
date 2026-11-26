@@ -1,5 +1,5 @@
 [Unit]
-Description=Root-side boot configuration from Parameter Store
+Description=Boot configuration from Parameter Store
 Wants=network-online.target
 After=network-online.target
 
@@ -7,12 +7,12 @@ After=network-online.target
 Type=oneshot
 User=root
 Group=pghash
-ExecStart=/opt/scripts/boot-root.sh
+ExecStart=/opt/scripts/boot-config.sh
 RemainAfterExit=yes
 RuntimeDirectory=boot-postgresql
 RuntimeDirectoryMode=0750
-# The secret store, which holds what the inbox delivers (see boot-root.sh).
-StateDirectory=boot-root
+# The secret store, which holds what the inbox delivers (see boot-config.sh).
+StateDirectory=boot-config
 StateDirectoryMode=0700
 
 IPAddressAllow=any
