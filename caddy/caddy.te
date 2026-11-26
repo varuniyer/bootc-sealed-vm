@@ -3,7 +3,8 @@ policy_module(caddy, 1.0.0)
 type caddy_t;
 type caddy_exec_t;
 init_daemon_domain(caddy_t, caddy_exec_t)
-# sandbox.conf sets NoNewPrivileges, under which systemd enters a domain only with nnp_transition.
+# service-restrictions.conf sets NoNewPrivileges, under which systemd enters a domain only with
+# nnp_transition.
 init_nnp_daemon_domain(caddy_t)
 
 type caddy_etc_t;

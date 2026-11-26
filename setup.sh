@@ -30,8 +30,8 @@ usermod -s /usr/sbin/nologin postgres
 systemctl mask serial-getty@.service
 # Growing the root partition would take the free space that systemd-repart gives /var.
 systemctl mask bootc-generic-growpart.service
-# irqbalance.service sets PrivateUsers, and attack-surface.conf allows no user namespace, so it fails
-# at every boot. The VM has one vCPU, which leaves no interrupts to balance.
+# irqbalance.service sets PrivateUsers, and kernel-restrictions.conf allows no user namespace, so it
+# fails at every boot. The VM has one vCPU, which leaves no interrupts to balance.
 systemctl mask irqbalance.service
 # systemd-sysext and systemd-confext merge extensions from /var/lib/extensions and /var/lib/confexts
 # over /usr and /etc before sysinit.target. The image ships none, and the composefs digest covers no
@@ -68,10 +68,10 @@ chmod 0640 /etc/caddy/Caddyfile
 groupadd -r pghash
 usermod -aG pghash postgres
 
-# Every shipped unit links the shared sandbox.
+# Every shipped unit links the shared restrictions.
 for unit in boot-config modules-disabled boot-tailscale boot-postgresql tailscaled caddy postgresql stalwart-apply stalwart; do
     mkdir -p /usr/lib/systemd/system/$unit.service.d
-    ln -s ../../sandbox.conf /usr/lib/systemd/system/$unit.service.d/sandbox.conf
+    ln -s ../../service-restrictions.conf /usr/lib/systemd/system/$unit.service.d/service-restrictions.conf
 done
 for unit in boot-postgresql postgresql; do
     ln -s ../../run-as-postgres.conf /usr/lib/systemd/system/$unit.service.d/run-as-postgres.conf

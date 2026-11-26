@@ -69,12 +69,12 @@ COPY kargs.d/algif-aead.toml /usr/lib/bootc/kargs.d/algif-aead.toml
 COPY kargs.d/heap.toml      /usr/lib/bootc/kargs.d/heap.toml
 COPY kargs.d/page-shuffle.toml /usr/lib/bootc/kargs.d/page-shuffle.toml
 COPY kargs.d/panic.toml     /usr/lib/bootc/kargs.d/panic.toml
-COPY sysctl.d/attack-surface.conf /usr/lib/sysctl.d/attack-surface.conf
+COPY sysctl.d/kernel-restrictions.conf /usr/lib/sysctl.d/kernel-restrictions.conf
 COPY modprobe.d/unused-protocols.conf /usr/lib/modprobe.d/unused-protocols.conf
 COPY modules-load.d/vfat.conf /usr/lib/modules-load.d/vfat.conf
 COPY caddy/Caddyfile        /etc/caddy/Caddyfile
 COPY journald.conf          /etc/systemd/journald.conf
-COPY sandbox.conf           /usr/lib/systemd/sandbox.conf
+COPY service-restrictions.conf           /usr/lib/systemd/service-restrictions.conf
 COPY postgresql/run-as-postgres.conf /usr/lib/systemd/run-as-postgres.conf
 COPY stalwart/run-as-stalwart.conf /usr/lib/systemd/run-as-stalwart.conf
 COPY postgresql/pgdata.conf /usr/lib/systemd/pgdata.conf

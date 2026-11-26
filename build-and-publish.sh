@@ -73,7 +73,7 @@ aws kms get-public-key --key-id "$PCR_KEY" --query PublicKey --output text | bas
 # --pull=always checks the base image against build-policy.json for each stage that pulls it.
 build=(podman build --layers=false --signature-policy containers/build-policy.json --secret id=entitlement_certificate,env=RHSM_ENTITLEMENT_CERTIFICATE --secret id=entitlement_key,env=RHSM_ENTITLEMENT_KEY -f Containerfile)
 seal=(podman run --rm --network=none -v "$PWD/sealed:/sealed:Z")
-flattened=(--mount type=image,source=localhost/flattened,destination=/target)
+flattened_mount=(--mount type=image,source=localhost/flattened,destination=/target)
 
 "${build[@]}" --pull=always --target sealing-tools -t localhost/sealing-tools .
 "${seal[@]}" localhost/sealing-tools bash /seal.sh boot-attributes
@@ -81,11 +81,11 @@ sign_attributes boot
 "${seal[@]}" localhost/sealing-tools bash /seal.sh attach boot .signed
 
 "${build[@]}" --pull=always --target flattened -t localhost/flattened .
-"${seal[@]}" "${flattened[@]}" localhost/sealing-tools bash /seal.sh uki-policy
+"${seal[@]}" "${flattened_mount[@]}" localhost/sealing-tools bash /seal.sh uki-policy
 jq -ej '.sha256 | if length == 1 then .[0].pol | ascii_upcase else error("expected one PCR policy") end' sealed/pcr-policy.json | basenc -d --base16 > sealed/pcr-policy
 pcr_signature=$(kms_sign "$PCR_KEY" RSASSA_PKCS1_V1_5_SHA_256 sealed/pcr-policy)
 jq -c --arg signature "$pcr_signature" '.sha256[0].sig = $signature' sealed/pcr-policy.json > sealed/pcr-signature.json
-"${seal[@]}" "${flattened[@]}" localhost/sealing-tools bash /seal.sh uki-attributes
+"${seal[@]}" "${flattened_mount[@]}" localhost/sealing-tools bash /seal.sh uki-attributes
 sign_attributes uki
 "${seal[@]}" localhost/sealing-tools bash /seal.sh attach uki
 

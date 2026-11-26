@@ -3,7 +3,8 @@ policy_module(stalwart, 1.0.0)
 type stalwart_t;
 type stalwart_exec_t;
 init_daemon_domain(stalwart_t, stalwart_exec_t)
-# sandbox.conf sets NoNewPrivileges, under which systemd enters a domain only with nnp_transition.
+# service-restrictions.conf sets NoNewPrivileges, under which systemd enters a domain only with
+# nnp_transition.
 init_nnp_daemon_domain(stalwart_t)
 
 type stalwart_etc_t;

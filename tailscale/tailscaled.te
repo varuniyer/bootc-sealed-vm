@@ -3,7 +3,8 @@ policy_module(tailscaled, 1.0.0)
 type tailscaled_t;
 type tailscaled_exec_t;
 init_daemon_domain(tailscaled_t, tailscaled_exec_t)
-# sandbox.conf sets NoNewPrivileges, under which systemd enters a domain only with nnp_transition.
+# service-restrictions.conf sets NoNewPrivileges, under which systemd enters a domain only with
+# nnp_transition.
 init_nnp_daemon_domain(tailscaled_t)
 
 # The node key and state file.
@@ -53,9 +54,9 @@ dev_read_urand(tailscaled_t)
 fs_read_cgroup_files(tailscaled_t)
 auth_read_passwd(tailscaled_t)
 
-# tailscaled probes for loginctl and the D-Bus socket, and the sandbox gives it a use for neither.
-# It also watches /etc for another program replacing a resolv.conf it wrote, and it writes none,
-# because boot-tailscale.sh sets --accept-dns=false.
+# tailscaled probes for loginctl and the D-Bus socket, and its unit's restrictions give it a use for
+# neither. It also watches /etc for another program replacing a resolv.conf it wrote, and it writes
+# none, because boot-tailscale.sh sets --accept-dns=false.
 gen_require(`
 	type bin_t;
 	type etc_t;

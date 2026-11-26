@@ -7,7 +7,7 @@ After=multi-user.target
 [Service]
 Type=oneshot
 ExecStart=/usr/sbin/sysctl kernel.modules_disabled=1
-# sandbox.conf's ProtectKernelTunables mounts /proc/sys read-only.
+# service-restrictions.conf's ProtectKernelTunables mounts /proc/sys read-only.
 ReadWritePaths=/proc/sys/kernel/modules_disabled
 
 [Install]

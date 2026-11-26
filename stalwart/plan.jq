@@ -16,7 +16,8 @@
     # provision.sh makes the DKIM key and publishes its record, so the plan declares the signature.
     "dkimManagement": {"@type": "Manual"},
     "dnsManagement": {"@type": "Manual"},
-    # Every address at the mail domains, postmaster@ and abuse@ among them, lands in the one mailbox.
+    # Stalwart delivers mail for every address at the mail domains, postmaster@ and abuse@ among
+    # them, to the one mailbox.
     "catchAllAddress": $mailbox_address
   }}},
   # Stalwart signs each message an authenticated client sends from a mail domain.
