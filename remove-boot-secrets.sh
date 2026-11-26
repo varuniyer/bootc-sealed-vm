@@ -6,9 +6,9 @@ set -euo pipefail
 # PostgreSQL answers once some boot finished, so provision.sh reboots the VM while secrets are pending.
 source "$PWD/build.env"
 source "$PWD/region.sh"
-names=$(aws ssm get-parameters --names "${VM_PARAMETERS}pending-secrets" "${VM_PARAMETERS}tailscale-auth-key" "${VM_PARAMETERS}postgresql-experiments-hash" --query 'Parameters[].Name' --output text)
-[ -n "$names" ] || exit 0
-# provision.sh sets the tailnet among the VM's parameters.
-tailnet=$(aws ssm get-parameter --name "${VM_PARAMETERS}tailnet" --query Parameter.Value --output text)
-until pg_isready -q -h "$REPOSITORY.$tailnet"; do sleep 10; done
-aws ssm delete-parameters --names $names >/dev/null
+boot_secret_names=$(aws ssm get-parameters --names "${VM_PARAMETER_PATH}pending-secrets" "${VM_PARAMETER_PATH}tailscale-auth-key" "${VM_PARAMETER_PATH}postgresql-experiments-password-hash" --query 'Parameters[].Name' --output text)
+[ -n "$boot_secret_names" ] || exit 0
+# provision.sh sets the tailnet DNS name among the VM's parameters.
+tailnet_dns_name=$(aws ssm get-parameter --name "${VM_PARAMETER_PATH}tailnet-dns-name" --query Parameter.Value --output text)
+until pg_isready -q -h "$REPOSITORY.$tailnet_dns_name"; do sleep 10; done
+aws ssm delete-parameters --names $boot_secret_names >/dev/null

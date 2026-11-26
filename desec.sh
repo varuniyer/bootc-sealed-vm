@@ -2,7 +2,7 @@
 # for itself, whose policies deny every RRset except the ones the run writes.
 # Every token reaches curl through a /dev/fd header file, so none appears in argv.
 desec_api=https://desec.io/api/v1
-call_desec() { curl -sSf -H @<(printf 'Authorization: Token %s' "$DESEC_TOKEN") "$@"; }
+call_desec() { curl -sSf -H @<(printf 'Authorization: Token %s' "$DESEC_RUN_TOKEN") "$@"; }
 call_desec_token_management() { curl -sSf -H @<(printf 'Authorization: Token %s' "$DESEC_TOKEN_MANAGEMENT_TOKEN") "$@"; }
 # deSEC serves each domain's zone, and owns_qname finds the zone that holds a name.
 fetch_zone() { call_desec "$desec_api/domains/?owns_qname=$1" | jq -er '.[0].name'; }
@@ -16,19 +16,19 @@ format_rrset() { jq -nc --arg subname "$1" --arg type "$2" --argjson records "$3
 # default-deny policy before any write, since deSEC lets a token without policies write every RRset.
 # The sourcing script sets no EXIT trap, so this one, which deletes the token, holds.
 create_desec_token() {
-    local old_ids old_id token
+    local stale_token_ids stale_token_id token_response
     read_secret 'deSEC token-management token' DESEC_TOKEN_MANAGEMENT_TOKEN
-    old_ids=$(call_desec_token_management "$desec_api/auth/tokens/" | jq -r --arg name "$1" '.[] | select(.name == $name) | .id')
-    for old_id in $old_ids; do
-        call_desec_token_management -X DELETE "$desec_api/auth/tokens/$old_id/" >/dev/null
+    stale_token_ids=$(call_desec_token_management "$desec_api/auth/tokens/" | jq -r --arg name "$1" '.[] | select(.name == $name) | .id')
+    for stale_token_id in $stale_token_ids; do
+        call_desec_token_management -X DELETE "$desec_api/auth/tokens/$stale_token_id/" >/dev/null
     done
-    token=$(jq -nc --arg name "$1" '{name: $name, perm_create_domain: false, perm_delete_domain: false, perm_manage_tokens: false}' | \
+    token_response=$(jq -nc --arg name "$1" '{name: $name, perm_create_domain: false, perm_delete_domain: false, perm_manage_tokens: false}' | \
         call_desec_token_management -X POST -H 'Content-Type: application/json' --data @- "$desec_api/auth/tokens/")
-    desec_token_id=$(printf '%s' "$token" | jq -er .id)
-    trap 'call_desec_token_management -X DELETE "$desec_api/auth/tokens/$desec_token_id/" >/dev/null' EXIT
-    DESEC_TOKEN=$(printf '%s' "$token" | jq -er .token)
+    desec_run_token_id=$(printf '%s' "$token_response" | jq -er .id)
+    trap 'call_desec_token_management -X DELETE "$desec_api/auth/tokens/$desec_run_token_id/" >/dev/null' EXIT
+    DESEC_RUN_TOKEN=$(printf '%s' "$token_response" | jq -er .token)
     jq -nc '{domain: null, subname: null, type: null}' | \
-        call_desec_token_management -X POST -H 'Content-Type: application/json' --data @- "$desec_api/auth/tokens/$desec_token_id/policies/rrsets/" >/dev/null
+        call_desec_token_management -X POST -H 'Content-Type: application/json' --data @- "$desec_api/auth/tokens/$desec_run_token_id/policies/rrsets/" >/dev/null
 }
 
 # Gives the run's token a write policy for each RRset in the JSON array $2, then PATCHes them into
@@ -37,7 +37,7 @@ write_rrsets() {
     local policies policy
     policies=$(printf '%s' "$2" | jq -c --arg zone "$1" '.[] | {domain: $zone, subname, type, perm_write: true}')
     for policy in $policies; do
-        printf '%s' "$policy" | call_desec_token_management -X POST -H 'Content-Type: application/json' --data @- "$desec_api/auth/tokens/$desec_token_id/policies/rrsets/" >/dev/null
+        printf '%s' "$policy" | call_desec_token_management -X POST -H 'Content-Type: application/json' --data @- "$desec_api/auth/tokens/$desec_run_token_id/policies/rrsets/" >/dev/null
     done
     printf '%s' "$2" | call_desec -X PATCH -H 'Content-Type: application/json' --data @- "$desec_api/domains/$1/rrsets/" >/dev/null
 }

@@ -22,13 +22,13 @@ if [ "$operator_tag_missing" = true ]; then
 fi
 
 # provision.sh sets both values among the VM's parameters.
-domain=$(aws ssm get-parameter --name "${VM_PARAMETERS}domain" --query Parameter.Value --output text)
-tailnet=$(aws ssm get-parameter --name "${VM_PARAMETERS}tailnet" --query Parameter.Value --output text)
+domain=$(aws ssm get-parameter --name "${VM_PARAMETER_PATH}domain" --query Parameter.Value --output text)
+tailnet_dns_name=$(aws ssm get-parameter --name "${VM_PARAMETER_PATH}tailnet-dns-name" --query Parameter.Value --output text)
 create_desec_token publish-tlsa
 
-if ! spki_hash=$(timeout 30 openssl s_client -starttls smtp -connect "$REPOSITORY.$tailnet:25" -servername "mail.$domain" -verify_hostname "mail.$domain" -verify_return_error </dev/null 2>/dev/null | \
+if ! spki_hash=$(timeout 30 openssl s_client -starttls smtp -connect "$REPOSITORY.$tailnet_dns_name:25" -servername "mail.$domain" -verify_hostname "mail.$domain" -verify_return_error </dev/null 2>/dev/null | \
         openssl x509 -pubkey -noout 2>/dev/null | openssl pkey -pubin -outform DER 2>/dev/null | sha256sum | cut -d' ' -f1); then
-    echo "No certificate that validates for mail.$domain at $REPOSITORY.$tailnet:25, so the TLSA record is unchanged." >&2
+    echo "No certificate that validates for mail.$domain at $REPOSITORY.$tailnet_dns_name:25, so the TLSA record is unchanged." >&2
     exit 1
 fi
 

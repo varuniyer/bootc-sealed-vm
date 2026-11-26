@@ -20,7 +20,7 @@
 	}
 }
 
-(static_files) {
+(precompressed_file_server) {
 	file_server {
 		precompressed br gzip
 	}
@@ -32,15 +32,15 @@
 
 	root * /usr/share/site
 
-	@assets path *.webp *.css *.js
-	header @assets Cache-Control "public, max-age=31536000, immutable"
+	@immutable_files path *.webp *.css *.js
+	header @immutable_files Cache-Control "public, max-age=31536000, immutable"
 	header Content-Security-Policy "default-src 'none'; style-src 'self'; script-src 'self'; img-src 'self'; font-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none';"
 
-	import static_files
+	import precompressed_file_server
 
 	handle_errors 404 {
 		rewrite * /404.html
-		import static_files
+		import precompressed_file_server
 	}
 }
 

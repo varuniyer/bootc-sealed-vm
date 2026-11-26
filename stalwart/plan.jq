@@ -67,7 +67,7 @@
   # The spam filter reads its rule set from the file the image contains. A task is deleted once it
   # runs, so each boot's task loads the rule set of the image that booted.
   {"@type": "update", "object": "SpamSettings", "value": {"spamFilterRulesUrl": "file:///usr/share/stalwart/spam-filter-rules.json.gz"}},
-  {"@type": "create", "object": "Task", "value": {"rules": {
+  {"@type": "create", "object": "Task", "value": {"spam_filter_rules_update": {
     "@type": "SpamFilterMaintenance", "maintenanceType": "updateRules", "status": {"@type": "Pending", "due": "2000-01-01T00:00:00Z"}
   }}},
   # The WebUI bundle carries no signature, so the server neither downloads nor serves it.

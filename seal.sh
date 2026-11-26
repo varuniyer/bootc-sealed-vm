@@ -5,7 +5,7 @@ set -euo pipefail
 # mounts at /sealed. The Secure Boot and PCR keys stay in KMS, so each step here stops where a
 # signature is due, and build-and-publish.sh has KMS make it before the next step.
 sealed=/sealed
-boot=$sealed/boot
+systemd_boot=$sealed/systemd-boot
 uki=$sealed/uki
 
 # pesign signs through an NSS database, which here holds only the Secure Boot certificate.
@@ -27,16 +27,16 @@ export_attributes() {
 # Builds the flattened image's UKI into the directory $1. The image is mounted at /target, and
 # split-kernel-and-rootfs left its kernel in /kernel.
 build_uki() {
-    local kver
-    kver=$(ls /target/kernel)
-    bootc container ukify --rootfs /target --kernel-dir "/target/kernel/$kver" -- --output "$1/$kver.efi" --pcr-banks sha256 "${@:2}"
+    local kernel_version
+    kernel_version=$(ls /target/kernel)
+    bootc container ukify --rootfs /target --kernel-dir "/target/kernel/$kernel_version" -- --output "$1/$kernel_version.efi" --pcr-banks sha256 "${@:2}"
 }
 
 case $1 in
-    boot-attributes)
-        mkdir $boot
-        cp /usr/lib/systemd/boot/efi/systemd-boot*.efi $boot
-        export_attributes $boot
+    systemd-boot-attributes)
+        mkdir $systemd_boot
+        cp /usr/lib/systemd/boot/efi/systemd-boot*.efi $systemd_boot
+        export_attributes $systemd_boot
         ;;
     # RHEL's crypto policy rejects SHA-1 signatures, so the PCR 11 policy covers the SHA-256 bank
     # alone. The signature covers PCR 11 only through leave-initrd. fstab's /var mount orders the

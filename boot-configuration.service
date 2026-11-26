@@ -11,7 +11,8 @@ ExecStart=/opt/scripts/boot-configuration.sh
 RemainAfterExit=yes
 RuntimeDirectory=boot-postgresql
 RuntimeDirectoryMode=0750
-# The secret store, which holds the pending secrets each boot stores (see boot-configuration.sh).
+# The secret store, which holds the secrets each boot stores from pending-secrets (see
+# boot-configuration.sh).
 StateDirectory=boot-configuration
 StateDirectoryMode=0700
 

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 VM_INSTANCE_TYPE=m9g.medium
-VM_DISK_SIZE=150
+VM_BOOT_VOLUME_SIZE=150
 BUILD_INSTANCE_TYPE=m9g.large
 BUILD_FEDORA_RELEASE=45
 DOMAIN=varuniyer.net
@@ -10,7 +10,7 @@ ACME_EMAIL=acme@varuniyer.net
 WEBSITE_ALIAS_DOMAINS="varuniyer.info, varuniyer.me, www.varuniyer.net, www.varuniyer.info, www.varuniyer.me"
 MAIL_USER=varun
 MAIL_ALIAS_DOMAINS="varuniyer.info"
-TAILNET=tailbc280c.ts.net
+TAILNET_DNS_NAME=tailbc280c.ts.net
 
 # operator-tools.sh runs this script in the operator-tools image, which supplies every tool it uses.
 # $1 is the website's checkout, which operator-tools.sh mounts read-only at /website.
@@ -38,17 +38,17 @@ fi
 # A run against the existing VM reuses every value that still holds, so a rerun with unchanged
 # settings and secrets changes nothing. Parameters remain when the VM they were set for is deleted,
 # and a new VM starts without them.
-existing_parameters=$(aws ssm get-parameters-by-path --path "$VM_PARAMETERS" --with-decryption --query 'Parameters[].{key: Name, value: Value}' | \
-    jq -c --arg path "$VM_PARAMETERS" 'map({(.key | ltrimstr($path)): .value}) | add // {}')
-if [ -z "$vm_instance_id" ] && [ "$existing_parameters" != '{}' ]; then
-    jq -r --arg path "$VM_PARAMETERS" 'keys[] | $path + .' <<< "$existing_parameters" | xargs -n 10 aws ssm delete-parameters --names >/dev/null
-    existing_parameters='{}'
+existing_vm_parameters=$(aws ssm get-parameters-by-path --path "$VM_PARAMETER_PATH" --with-decryption --query 'Parameters[].{key: Name, value: Value}' | \
+    jq -c --arg path "$VM_PARAMETER_PATH" 'map({(.key | ltrimstr($path)): .value}) | add // {}')
+if [ -z "$vm_instance_id" ] && [ "$existing_vm_parameters" != '{}' ]; then
+    jq -r --arg path "$VM_PARAMETER_PATH" 'keys[] | $path + .' <<< "$existing_vm_parameters" | xargs -n 10 aws ssm delete-parameters --names >/dev/null
+    existing_vm_parameters='{}'
 fi
-read_existing_parameter() { printf '%s' "$existing_parameters" | jq -r --arg key "$1" '.[$key] // empty'; }
+read_existing_vm_parameter() { printf '%s' "$existing_vm_parameters" | jq -r --arg key "$1" '.[$key] // empty'; }
 # pending-secrets carries each secret the VM lacks the current value of, and boot-configuration.sh
 # stores them on /var. It starts from any pending secrets a stopped run left in Parameter Store, so
 # that run's secrets still reach the VM.
-pending_secrets=$(read_existing_parameter pending-secrets)
+pending_secrets=$(read_existing_vm_parameter pending-secrets)
 [ -n "$pending_secrets" ] || \
     pending_secrets='{}'
 # add_pending_secret prints the pending secrets with the secret on its stdin added under key $1. The
@@ -62,7 +62,7 @@ create_desec_token provision
 # the VM. bcrypt salts every hash, so the run hashes the password only when the existing VM's Stalwart
 # rejects it. The JMAP session endpoint answers only a signed-in client.
 if [ -z "$vm_instance_id" ] || ! printf '%s:%s' "$MAIL_USER" "$MAIL_PASSWORD" | jq -Rrs '"user = " + @json' | \
-        curl -sfL --max-time 30 -o /dev/null -K - "https://$REPOSITORY.$TAILNET/.well-known/jmap"; then
+        curl -sfL --max-time 30 -o /dev/null -K - "https://$REPOSITORY.$TAILNET_DNS_NAME/.well-known/jmap"; then
     pending_secrets=$(printf '%s' "$MAIL_PASSWORD" | htpasswd -niBC 12 "$MAIL_USER" | cut -d: -f2- | tr -d '\n' | add_pending_secret mail-password-hash)
 fi
 
@@ -92,15 +92,15 @@ image_public_key=$(fetch_public_key "$IMAGE_KEY")
 # reads from this parameter. EC2 checks the parameter when the stack creates the launch template.
 # Fedora publishes its AMIs from this account.
 build_instance_ami_id=$(aws ec2 describe-images --owners 125523088429 --filters "Name=name,Values=Fedora-Cloud-Base-AmazonEC2.aarch64-$BUILD_FEDORA_RELEASE-*" --query 'sort_by(Images, &CreationDate)[-1].ImageId' --output text)
-existing_build_instance_ami_id=$(aws ssm get-parameters --names "${BUILD_PARAMETERS}build-instance-ami-id" --query 'Parameters[].Value' --output text)
+existing_build_instance_ami_id=$(aws ssm get-parameters --names "${BUILD_PARAMETER_PATH}build-instance-ami-id" --query 'Parameters[].Value' --output text)
 [ "$build_instance_ami_id" = "$existing_build_instance_ami_id" ] || \
-    aws ssm put-parameter --name "${BUILD_PARAMETERS}build-instance-ami-id" --type String --data-type aws:ec2:image --overwrite --value "$build_instance_ami_id" >/dev/null
+    aws ssm put-parameter --name "${BUILD_PARAMETER_PATH}build-instance-ami-id" --type String --data-type aws:ec2:image --overwrite --value "$build_instance_ami_id" >/dev/null
 
 # reserve-address.sh allocates the address, which remains after the VM and the stack, so DNS keeps
 # pointing at reprovisioned VMs and the address keeps its reverse DNS record.
 address_name=bootc-ip
-address_allocation=$(aws ec2 describe-addresses --filters "Name=tag:Name,Values=$address_name" --query 'Addresses[].AllocationId' --output text)
-if [ -z "$address_allocation" ]; then
+address_allocation_id=$(aws ec2 describe-addresses --filters "Name=tag:Name,Values=$address_name" --query 'Addresses[].AllocationId' --output text)
+if [ -z "$address_allocation_id" ]; then
     echo "No Elastic IP address is named $address_name. Run reserve-address.sh first (see README)." >&2
     exit 1
 fi
@@ -108,13 +108,13 @@ fi
 # infrastructure.yaml holds the other AWS resources that remain when the VM is deleted, and a deploy
 # changes only the resources whose definitions changed. The VM's network interface is in the
 # default subnet of the first zone that offers the instance type.
-zones=$(aws ec2 describe-instance-type-offerings --location-type availability-zone --filters "Name=instance-type,Values=$VM_INSTANCE_TYPE" --query 'InstanceTypeOfferings[].Location' --output text | tr '\t' ,)
-subnet=$(aws ec2 describe-subnets --filters Name=default-for-az,Values=true "Name=availability-zone,Values=$zones" --query 'sort_by(Subnets, &AvailabilityZone)[0].SubnetId' --output text)
+availability_zones=$(aws ec2 describe-instance-type-offerings --location-type availability-zone --filters "Name=instance-type,Values=$VM_INSTANCE_TYPE" --query 'InstanceTypeOfferings[].Location' --output text | tr '\t' ,)
+subnet=$(aws ec2 describe-subnets --filters Name=default-for-az,Values=true "Name=availability-zone,Values=$availability_zones" --query 'sort_by(Subnets, &AvailabilityZone)[0].SubnetId' --output text)
 stack=bootc
 aws cloudformation deploy --stack-name "$stack" --template-file infrastructure.yaml --capabilities CAPABILITY_NAMED_IAM --no-fail-on-empty-changeset --parameter-overrides \
-    "Repository=$REPOSITORY" "WebsiteRepository=$WEBSITE_REPOSITORY" "SecurebootKey=$SECUREBOOT_KEY" "PcrKey=$PCR_KEY" "ImageKey=$IMAGE_KEY" "BuildSecret=$BUILD_SECRET" "EntitlementCertificateSecret=$ENTITLEMENT_CERTIFICATE_SECRET" "BuildParameters=$BUILD_PARAMETERS" "VmParameters=$VM_PARAMETERS" "BuildInstanceType=$BUILD_INSTANCE_TYPE" "BuildInstanceName=$BUILD_INSTANCE_NAME" "BuildLog=$BUILD_LOG" "Subnet=$subnet" "AddressAllocation=$address_allocation" "WireguardPort=$WIREGUARD_PORT"
+    "Repository=$REPOSITORY" "WebsiteRepository=$WEBSITE_REPOSITORY" "SecurebootKey=$SECUREBOOT_KEY" "PcrKey=$PCR_KEY" "ImageKey=$IMAGE_KEY" "RedhatCredentialsSecret=$REDHAT_CREDENTIALS_SECRET" "EntitlementCertificateSecret=$ENTITLEMENT_CERTIFICATE_SECRET" "BuildParameterPath=$BUILD_PARAMETER_PATH" "VmParameterPath=$VM_PARAMETER_PATH" "BuildInstanceType=$BUILD_INSTANCE_TYPE" "BuildInstanceName=$BUILD_INSTANCE_NAME" "BuildLog=$BUILD_LOG" "Subnet=$subnet" "AddressAllocationId=$address_allocation_id" "WireguardPort=$WIREGUARD_PORT"
 fetch_stack_output() { aws cloudformation describe-stacks --stack-name "$stack" --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" --output text; }
-list_build_parameter() { aws ssm get-parameters --names "$BUILD_PARAMETERS$1" --query 'Parameters[].Name' --output text; }
+list_build_parameter() { aws ssm get-parameters --names "$BUILD_PARAMETER_PATH$1" --query 'Parameters[].Name' --output text; }
 
 # Each build instance applies tailscale/policy.json through a Tailscale federated credential, which
 # trusts only the tokens AWS signs for its role. The client ID and audience are public, so both are
@@ -131,10 +131,10 @@ tailscale_api_base=https://api.tailscale.com/api/v2
 call_tailscale_api() { curl -sS --fail-with-body -H @<(printf 'Authorization: Bearer %s' "$TAILSCALE_API_TOKEN") "$@"; }
 [ -n "$tailscale_policy_client_id_listed" ] || \
     {
-        stale_federated_credentials=$(call_tailscale_api "$tailscale_api_base/tailnet/-/keys?all=true" | \
+        stale_federated_credential_ids=$(call_tailscale_api "$tailscale_api_base/tailnet/-/keys?all=true" | \
             jq -r --arg description "$federated_credential_description" '.keys[] | select(.keyType == "federated" and .description == $description) | .id')
-        for stale_federated_credential in $stale_federated_credentials; do
-            call_tailscale_api -X DELETE "$tailscale_api_base/tailnet/-/keys/$stale_federated_credential" >/dev/null
+        for stale_federated_credential_id in $stale_federated_credential_ids; do
+            call_tailscale_api -X DELETE "$tailscale_api_base/tailnet/-/keys/$stale_federated_credential_id" >/dev/null
         done
         # AWS signs the tokens only once the account's outbound identity federation is on.
         issuer=$(aws iam get-outbound-web-identity-federation-info --query IssuerIdentifier --output text 2>/dev/null) || \
@@ -144,8 +144,8 @@ call_tailscale_api() { curl -sS --fail-with-body -H @<(printf 'Authorization: Be
             call_tailscale_api -H 'Content-Type: application/json' --data @- "$tailscale_api_base/tailnet/-/keys")
         tailscale_policy_audience=$(printf '%s' "$federated_credential" | jq -er '.audience // "api.tailscale.com/\(.id)"')
         tailscale_policy_client_id=$(printf '%s' "$federated_credential" | jq -er .id)
-        aws ssm put-parameter --name "${BUILD_PARAMETERS}tailscale-policy-audience" --type String --overwrite --value "$tailscale_policy_audience" >/dev/null
-        aws ssm put-parameter --name "${BUILD_PARAMETERS}tailscale-policy-client-id" --type String --value "$tailscale_policy_client_id" >/dev/null
+        aws ssm put-parameter --name "${BUILD_PARAMETER_PATH}tailscale-policy-audience" --type String --overwrite --value "$tailscale_policy_audience" >/dev/null
+        aws ssm put-parameter --name "${BUILD_PARAMETER_PATH}tailscale-policy-client-id" --type String --value "$tailscale_policy_client_id" >/dev/null
     }
 
 # publish-tlsa.sh runs here and reaches the VM's tailnet port 25 as tag:operator. A device can take
@@ -158,7 +158,7 @@ if [ "$operator_tag_missing" = true ]; then
         call_tailscale_api -H 'Content-Type: application/json' --data @- "$tailscale_api_base/device/$device_id/tags" >/dev/null
 fi
 
-fetch_vm_ami() { aws ec2 describe-images --owners self --filters "Name=name,Values=$VM_AMI" --query "Images[].$1" --output text; }
+fetch_vm_ami() { aws ec2 describe-images --owners self --filters "Name=name,Values=$VM_AMI_NAME" --query "Images[].$1" --output text; }
 # The firmware matches the certificate itself, so it only has to carry the Secure Boot key's public
 # half, and openssl signs it with a key this run makes and discards. A VM AMI built under an
 # earlier certificate would give a new VM firmware that rejects the new signatures.
@@ -171,7 +171,7 @@ secureboot_certificate_listed=$(list_build_parameter secureboot-certificate)
         stale_vm_ami_id=$(fetch_vm_ami ImageId)
         [ -z "$stale_vm_ami_id" ] || \
             aws ec2 deregister-image --image-id "$stale_vm_ami_id" --delete-associated-snapshots >/dev/null
-        aws ssm put-parameter --name "${BUILD_PARAMETERS}secureboot-certificate" --type String --value "$secureboot_certificate" >/dev/null
+        aws ssm put-parameter --name "${BUILD_PARAMETER_PATH}secureboot-certificate" --type String --value "$secureboot_certificate" >/dev/null
     }
 
 # Each build clones main from this repository's and the website's CodeCommit repositories. The first
@@ -180,19 +180,19 @@ secureboot_certificate_listed=$(list_build_parameter secureboot-certificate)
 codecommit_git=(git -c credential.helper='!aws codecommit credential-helper $@' -c credential.UseHttpPath=true)
 aws codecommit get-branch --repository-name "$WEBSITE_REPOSITORY" --branch-name main >/dev/null 2>&1 || \
     {
-        website_clone_url=$(fetch_stack_output WebsiteSourceCloneUrl)
+        website_clone_url=$(fetch_stack_output WebsiteCloneUrl)
         "${codecommit_git[@]}" -C /website push "$website_clone_url" main
     }
 vm_ami_state=$(fetch_vm_ami State)
-main_branch_listed=$(aws codecommit get-branch --repository-name "$REPOSITORY" --branch-name main --query branch.branchName --output text 2>/dev/null) || \
+existing_main_branch=$(aws codecommit get-branch --repository-name "$REPOSITORY" --branch-name main --query branch.branchName --output text 2>/dev/null) || \
     {
-        source_clone_url=$(fetch_stack_output SourceCloneUrl)
-        "${codecommit_git[@]}" push "$source_clone_url" main
+        clone_url=$(fetch_stack_output CloneUrl)
+        "${codecommit_git[@]}" push "$clone_url" main
     }
-[ -z "$main_branch_listed" ] || [ -n "$vm_ami_state" ] || \
+[ -z "$existing_main_branch" ] || [ -n "$vm_ami_state" ] || \
     {
-        build_start_arn=$(fetch_stack_output BuildStartArn)
-        aws stepfunctions start-execution --state-machine-arn "$build_start_arn" >/dev/null
+        build_state_machine_arn=$(fetch_stack_output BuildStateMachineArn)
+        aws stepfunctions start-execution --state-machine-arn "$build_state_machine_arn" >/dev/null
     }
 # EC2 creates an instance only from an available AMI. A build that ends without one has failed.
 until [ "$vm_ami_state" = available ]; do
@@ -210,14 +210,14 @@ done
 # holds, so Parameter Store records the SHA-256 of the one it was sent, as it records the public
 # halves of the keys.
 relay_password_sha256=$(printf '%s' "$RELAY_PASSWORD" | sha256sum | head -c 64)
-existing_relay_password_sha256=$(read_existing_parameter relay-password-sha256)
+existing_relay_password_sha256=$(read_existing_vm_parameter relay-password-sha256)
 [ "$relay_password_sha256" = "$existing_relay_password_sha256" ] || \
     pending_secrets=$(printf '%s' "$RELAY_PASSWORD" | add_pending_secret relay-password)
 
 # Stalwart signs Web Push notifications with this Web Push key, and clients' push subscriptions name
 # its public half, so the VM keeps its key while Parameter Store records the public half. openssl
 # writes each new key only to stdout.
-web_push_public_key=$(read_existing_parameter web-push-public-key)
+web_push_public_key=$(read_existing_vm_parameter web-push-public-key)
 [ -n "$web_push_public_key" ] || \
     {
         web_push_key=$(openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 2>/dev/null)
@@ -229,7 +229,7 @@ web_push_public_key=$(read_existing_parameter web-push-public-key)
 printf -v mta_sts_policy 'version: STSv1\nmode: enforce\nmx: mail.%s\nmax_age: 604800\n' "$DOMAIN"
 mta_sts_id=$(printf '%s' "$mta_sts_policy" | sha256sum | head -c 20)
 
-ip=$(aws ec2 describe-addresses --allocation-ids "$address_allocation" --query 'Addresses[0].PublicIp' --output text)
+address=$(aws ec2 describe-addresses --allocation-ids "$address_allocation_id" --query 'Addresses[0].PublicIp' --output text)
 
 # queue_rrset queues an RRset for its zone's one PATCH (see write_rrsets): a name, a type, and the
 # records as a JSON array. queue_zone_rrset takes the name's zone first, from a caller that holds it.
@@ -258,7 +258,7 @@ queue_spf() {
 # check the signature against the key's public half in DNS, which Parameter Store records as it does
 # the Web Push key's.
 dkim_selector=bootc
-dkim_public_key=$(read_existing_parameter dkim-public-key)
+dkim_public_key=$(read_existing_vm_parameter dkim-public-key)
 [ -n "$dkim_public_key" ] || \
     {
         dkim_key=$(openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 2>/dev/null)
@@ -284,7 +284,7 @@ done
 # TLS-ALPN-01 challenges that Caddy and Stalwart answer.
 website_alias_domains=(${WEBSITE_ALIAS_DOMAINS//,/ })
 for name in "$DOMAIN" "mail.$DOMAIN" "mta-sts.$DOMAIN" "${website_alias_domains[@]}"; do
-    queue_rrset "$name" A "[\"$ip\"]"
+    queue_rrset "$name" A "[\"$address\"]"
     queue_rrset "$name" CAA '["0 issue \"letsencrypt.org; validationmethods=http-01,tls-alpn-01\""]'
 done
 # A website alias domain that receives no mail refuses it with a null MX and forbids sending as it.
@@ -307,27 +307,27 @@ done
 # Every boot reads the settings, and the public halves name the keys the VM holds. A parameter is
 # written only when it holds another value.
 parameters_changed=
-set_parameter() {
-    jq -e --arg key "$1" --rawfile value <(printf '%s' "$3") '.[$key] == $value' <<< "$existing_parameters" >/dev/null && return
-    aws ssm put-parameter --name "$VM_PARAMETERS$1" --type "$2" --overwrite --value "file://"<(printf '%s' "$3") >/dev/null
+set_vm_parameter() {
+    jq -e --arg key "$1" --rawfile value <(printf '%s' "$3") '.[$key] == $value' <<< "$existing_vm_parameters" >/dev/null && return
+    aws ssm put-parameter --name "$VM_PARAMETER_PATH$1" --type "$2" --overwrite --value "file://"<(printf '%s' "$3") >/dev/null
     parameters_changed=1
 }
-set_parameter acme-email String "$ACME_EMAIL"
-set_parameter domain String "$DOMAIN"
-set_parameter website-alias-domains String "$WEBSITE_ALIAS_DOMAINS"
-set_parameter mta-sts-policy String "$mta_sts_policy"
-set_parameter image-public-key String "$image_public_key"
-set_parameter mail-user String "$MAIL_USER"
-set_parameter mail-alias-domains String "$MAIL_ALIAS_DOMAINS"
-set_parameter tailnet String "$TAILNET"
-set_parameter dkim-selector String "$dkim_selector"
-set_parameter dkim-public-key String "$dkim_public_key"
-set_parameter web-push-public-key String "$web_push_public_key"
+set_vm_parameter acme-email String "$ACME_EMAIL"
+set_vm_parameter domain String "$DOMAIN"
+set_vm_parameter website-alias-domains String "$WEBSITE_ALIAS_DOMAINS"
+set_vm_parameter mta-sts-policy String "$mta_sts_policy"
+set_vm_parameter image-public-key String "$image_public_key"
+set_vm_parameter mail-user String "$MAIL_USER"
+set_vm_parameter mail-alias-domains String "$MAIL_ALIAS_DOMAINS"
+set_vm_parameter tailnet-dns-name String "$TAILNET_DNS_NAME"
+set_vm_parameter dkim-selector String "$dkim_selector"
+set_vm_parameter dkim-public-key String "$dkim_public_key"
+set_vm_parameter web-push-public-key String "$web_push_public_key"
 [ "$pending_secrets" = '{}' ] || \
-    set_parameter pending-secrets SecureString "$pending_secrets"
+    set_vm_parameter pending-secrets SecureString "$pending_secrets"
 # The hash follows pending-secrets, so a run that stops between the two writes sends the password
 # again.
-set_parameter relay-password-sha256 String "$relay_password_sha256"
+set_vm_parameter relay-password-sha256 String "$relay_password_sha256"
 if [ -n "$vm_instance_id" ]; then
     # The VM reads its parameters at boot, so it boots again when a value changed. It also boots
     # again while secrets are pending, because remove-boot-secrets.sh removes pending-secrets once
@@ -340,7 +340,7 @@ else
     # AWS CLI reads the hash from the pipe on /dev/fd/0. initdb refuses to run as root, so the hasher
     # runs as postgres.
     printf '%s' "$POSTGRESQL_EXPERIMENTS_PASSWORD" | runuser -u postgres -- /hash-postgresql-password/run.sh | tr -d '\n' | \
-        aws ssm put-parameter --name "${VM_PARAMETERS}postgresql-experiments-hash" --type SecureString --value file:///dev/fd/0 >/dev/null
+        aws ssm put-parameter --name "${VM_PARAMETER_PATH}postgresql-experiments-password-hash" --type SecureString --value file:///dev/fd/0 >/dev/null
     # The first boot logs in with this key, and every later boot reuses the node key in tailscaled's
     # state on /var. A tagged node's key never expires, so the auth key needs to last only until the
     # first boot, and a non-ephemeral node stays registered while the VM reboots.
@@ -353,13 +353,13 @@ else
     if [ "$lock_enabled" = true ]; then
         tailscale_auth_key=$(tailscale lock sign file:<(printf '%s' "$tailscale_auth_key"))
     fi
-    set_parameter tailscale-auth-key SecureString "$tailscale_auth_key"
+    set_vm_parameter tailscale-auth-key SecureString "$tailscale_auth_key"
     # The firmware keys come from the VM AMI, and the role lets the VM read its parameters and
     # pull its image. A hop limit of 1 keeps the role's credentials from anything behind a NAT.
     vm_ami_id=$(fetch_vm_ami ImageId)
     vm_interface=$(fetch_stack_output VmInterface)
     aws ec2 run-instances --image-id "$vm_ami_id" --instance-type "$VM_INSTANCE_TYPE" --network-interfaces "NetworkInterfaceId=$vm_interface,DeviceIndex=0" --iam-instance-profile Name=bootc-vm \
-        --block-device-mappings "DeviceName=/dev/sda1,Ebs={VolumeSize=$VM_DISK_SIZE,VolumeType=gp3}" --metadata-options HttpTokens=required,HttpPutResponseHopLimit=1 --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=$vm_name}]" >/dev/null
+        --block-device-mappings "DeviceName=/dev/sda1,Ebs={VolumeSize=$VM_BOOT_VOLUME_SIZE,VolumeType=gp3}" --metadata-options HttpTokens=required,HttpPutResponseHopLimit=1 --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=$vm_name}]" >/dev/null
 fi
 
 "$PWD/remove-boot-secrets.sh"
@@ -368,17 +368,17 @@ fi
 # can move the signature. Removing the auth key's credential re-signs nothing, since re-signing would
 # keep its key as the VM's rotation key. A terminal would make `lock remove` ask for confirmation.
 lock_status=$(tailscale lock status --json)
-vm_peer=$(printf '%s' "$lock_status" | jq -c --arg name "$REPOSITORY.$TAILNET." '[.VisiblePeers[]? | select(.DNSName == $name and .NodeKeySignature.Nested.SigKind? == "credential")][0] // empty')
+vm_peer=$(printf '%s' "$lock_status" | jq -c --arg name "$REPOSITORY.$TAILNET_DNS_NAME." '[.VisiblePeers[]? | select(.DNSName == $name and .NodeKeySignature.Nested.SigKind? == "credential")][0] // empty')
 if [ -n "$vm_peer" ]; then
     vm_node_key=$(printf '%s' "$vm_peer" | jq -er .NodeKey)
     credential_key=$(printf '%s' "$vm_peer" | jq -er .NodeKeySignature.Nested.KeyID)
-    credential_nodes=$(printf '%s' "$lock_status" | jq --arg key "$credential_key" '[.VisiblePeers[] | select(.NodeKeySignature.Nested.KeyID? == $key)] | length')
+    credential_node_count=$(printf '%s' "$lock_status" | jq --arg key "$credential_key" '[.VisiblePeers[] | select(.NodeKeySignature.Nested.KeyID? == $key)] | length')
     rotation_key=$(openssl genpkey -algorithm ed25519 | openssl pkey -pubout -outform DER | tail -c 32 | od -An -tx1 -v | tr -d ' \n')
-    [ "$credential_nodes" != 1 ] || \
+    [ "$credential_node_count" != 1 ] || \
         tailscale lock sign "$vm_node_key" "tlpub:$rotation_key"
     tailscale lock remove --re-sign=false "$credential_key" >/dev/null
-    if [ "$credential_nodes" != 1 ]; then
-        echo "$credential_nodes nodes carried the VM auth key's credential, which is now removed. Check 'tailscale lock status' and sign the VM's node key." >&2
+    if [ "$credential_node_count" != 1 ]; then
+        echo "$credential_node_count nodes carried the VM auth key's credential, which is now removed. Check 'tailscale lock status' and sign the VM's node key." >&2
         exit 1
     fi
 fi

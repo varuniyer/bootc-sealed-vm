@@ -6,12 +6,12 @@ set -euo pipefail
 logged_in_file=$STATE_DIRECTORY/logged-in
 if [ ! -f "$logged_in_file" ]; then
     # The auth key passes through a file (private /tmp) so it stays out of argv.
-    key_file=$(mktemp)
-    /opt/scripts/fetch-parameter.sh tailscale-auth-key > "$key_file"
+    auth_key_file=$(mktemp)
+    /opt/scripts/fetch-parameter.sh tailscale-auth-key > "$auth_key_file"
 
-    tailscale up --auth-key="file:$key_file" --hostname=bootc-sealed-vm --advertise-tags=tag:vm \
+    tailscale up --auth-key="file:$auth_key_file" --hostname=bootc-sealed-vm --advertise-tags=tag:vm \
         --accept-dns=false --accept-routes=false --ssh=false
-    rm "$key_file"
+    rm "$auth_key_file"
     touch "$logged_in_file"
 fi
 

@@ -6,7 +6,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-EnvironmentFile=/run/stalwart/env
+EnvironmentFile=/run/stalwart/environment
 ExecStart=/usr/bin/stalwart --config /etc/stalwart/config.json
 Restart=on-failure
 LimitNOFILE=65536

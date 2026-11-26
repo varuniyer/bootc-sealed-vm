@@ -14,13 +14,13 @@ Parameters:
     Type: String
   ImageKey:
     Type: String
-  BuildSecret:
+  RedhatCredentialsSecret:
     Type: String
   EntitlementCertificateSecret:
     Type: String
-  BuildParameters:
+  BuildParameterPath:
     Type: String
-  VmParameters:
+  VmParameterPath:
     Type: String
   BuildInstanceType:
     Type: String
@@ -30,18 +30,18 @@ Parameters:
     Type: String
   Subnet:
     Type: AWS::EC2::Subnet::Id
-  AddressAllocation:
+  AddressAllocationId:
     Type: String
   WireguardPort:
     Type: Number
 
 Resources:
-  SourceRepository:
+  CodeCommitRepository:
     Type: AWS::CodeCommit::Repository
     Properties:
       RepositoryName: !Ref Repository
 
-  WebsiteSourceRepository:
+  WebsiteCodeCommitRepository:
     Type: AWS::CodeCommit::Repository
     Properties:
       RepositoryName: !Ref WebsiteRepository
@@ -89,8 +89,8 @@ Resources:
               - Effect: Allow
                 Action: codecommit:GitPull
                 Resource:
-                  - !GetAtt SourceRepository.Arn
-                  - !GetAtt WebsiteSourceRepository.Arn
+                  - !GetAtt CodeCommitRepository.Arn
+                  - !GetAtt WebsiteCodeCommitRepository.Arn
               - Effect: Allow
                 Action: ecr:GetAuthorizationToken
                 Resource: '*'
@@ -119,11 +119,11 @@ Resources:
               - Effect: Allow
                 Action: secretsmanager:GetSecretValue
                 Resource:
-                  - !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${BuildSecret}-??????
+                  - !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${RedhatCredentialsSecret}-??????
                   - !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${EntitlementCertificateSecret}-??????
               - Effect: Allow
                 Action: ssm:GetParameter
-                Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${BuildParameters}*
+                Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${BuildParameterPath}*
               - Effect: Allow
                 Action: s3:PutObject
                 Resource: !Sub ${BuildLogBucket.Arn}/${BuildLog}
@@ -163,7 +163,7 @@ Resources:
     Properties:
       LaunchTemplateName: bootc-build
       LaunchTemplateData:
-        ImageId: !Sub resolve:ssm:${BuildParameters}build-instance-ami-id
+        ImageId: !Sub resolve:ssm:${BuildParameterPath}build-instance-ami-id
         InstanceType: !Ref BuildInstanceType
         IamInstanceProfile:
           Arn: !GetAtt BuildInstanceProfile.Arn
@@ -196,18 +196,18 @@ Resources:
             {
                 dnf install -y -q git-core awscli2 &&
                 git config --global credential.helper '!aws codecommit credential-helper $@' && git config --global credential.UseHttpPath true &&
-                git clone -q --depth=1 --branch main ${SourceRepository.CloneUrlHttp} /root/build &&
-                git clone -q --depth=1 --branch main ${WebsiteSourceRepository.CloneUrlHttp} /root/website &&
-                cd /root/build && bash build-and-publish.sh
+                git clone -q --depth=1 --branch main ${CodeCommitRepository.CloneUrlHttp} /root/bootc-sealed-vm &&
+                git clone -q --depth=1 --branch main ${WebsiteCodeCommitRepository.CloneUrlHttp} /root/website &&
+                cd /root/bootc-sealed-vm && bash build-and-publish.sh
                 echo "The build exited with status $?."
             } > /root/build.log 2>&1
             aws s3 cp --quiet /root/build.log "s3://${BuildLogBucket}/${BuildLog}"
             shutdown -h now
 
-  BuildStartRole:
+  BuildStateMachineRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: bootc-build-start
+      RoleName: bootc-build-state-machine
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -237,14 +237,14 @@ Resources:
                 Resource: !GetAtt BuildRole.Arn
               - Effect: Allow
                 Action: ssm:GetParameters
-                Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${BuildParameters}build-instance-ami-id
+                Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${BuildParameterPath}build-instance-ami-id
   # One execution starts one build instance. The daily rule, the push rule, and provision.sh all
   # start builds through this state machine.
-  BuildStart:
+  BuildStateMachine:
     Type: AWS::StepFunctions::StateMachine
     Properties:
       StateMachineName: bootc-build
-      RoleArn: !GetAtt BuildStartRole.Arn
+      RoleArn: !GetAtt BuildStateMachineRole.Arn
       Definition:
         StartAt: RunBuildInstance
         States:
@@ -258,10 +258,10 @@ Resources:
               MaxCount: 1
             End: true
 
-  BuildTriggerRole:
+  BuildRuleRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: bootc-build-trigger
+      RoleName: bootc-build-rule
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -276,10 +276,10 @@ Resources:
             Statement:
               - Effect: Allow
                 Action: states:StartExecution
-                Resource: !Ref BuildStart
+                Resource: !Ref BuildStateMachine
   # The daily build includes the latest package updates. It starts at half past the hour, so the
   # image is published before the VM's fetch at the top of the next
-  # (bootc-fetch-apply-updates-interval.conf).
+  # (bootc-fetch-apply-updates-hourly.conf).
   DailyBuild:
     Type: AWS::Events::Rule
     Properties:
@@ -287,8 +287,8 @@ Resources:
       ScheduleExpression: cron(30 23 * * ? *)
       Targets:
         - Id: build
-          Arn: !Ref BuildStart
-          RoleArn: !GetAtt BuildTriggerRole.Arn
+          Arn: !Ref BuildStateMachine
+          RoleArn: !GetAtt BuildRuleRole.Arn
   PushBuild:
     Type: AWS::Events::Rule
     Properties:
@@ -299,8 +299,8 @@ Resources:
         detail-type:
           - CodeCommit Repository State Change
         resources:
-          - !GetAtt SourceRepository.Arn
-          - !GetAtt WebsiteSourceRepository.Arn
+          - !GetAtt CodeCommitRepository.Arn
+          - !GetAtt WebsiteCodeCommitRepository.Arn
         detail:
           event:
             - referenceCreated
@@ -311,8 +311,8 @@ Resources:
             - main
       Targets:
         - Id: build
-          Arn: !Ref BuildStart
-          RoleArn: !GetAtt BuildTriggerRole.Arn
+          Arn: !Ref BuildStateMachine
+          RoleArn: !GetAtt BuildRuleRole.Arn
 
   VmRole:
     Type: AWS::IAM::Role
@@ -334,7 +334,7 @@ Resources:
                 Action:
                   - ssm:GetParameter
                   - ssm:GetParametersByPath
-                Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${VmParameters}*
+                Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${VmParameterPath}*
               - Effect: Allow
                 Action: ecr:GetAuthorizationToken
                 Resource: '*'
@@ -388,17 +388,17 @@ Resources:
   VmAddressAssociation:
     Type: AWS::EC2::EIPAssociation
     Properties:
-      AllocationId: !Ref AddressAllocation
+      AllocationId: !Ref AddressAllocationId
       NetworkInterfaceId: !Ref VmInterface
 
 Outputs:
-  SourceCloneUrl:
-    Value: !GetAtt SourceRepository.CloneUrlHttp
-  WebsiteSourceCloneUrl:
-    Value: !GetAtt WebsiteSourceRepository.CloneUrlHttp
+  CloneUrl:
+    Value: !GetAtt CodeCommitRepository.CloneUrlHttp
+  WebsiteCloneUrl:
+    Value: !GetAtt WebsiteCodeCommitRepository.CloneUrlHttp
   BuildRoleArn:
     Value: !GetAtt BuildRole.Arn
-  BuildStartArn:
-    Value: !Ref BuildStart
+  BuildStateMachineArn:
+    Value: !Ref BuildStateMachine
   VmInterface:
     Value: !Ref VmInterface

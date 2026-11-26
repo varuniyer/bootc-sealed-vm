@@ -8,21 +8,21 @@ set -euo pipefail
 # operator-tools.sh runs this script in the operator-tools image, which supplies every tool it uses.
 [ -n "${OPERATOR_TOOLS:-}" ] || \
     exec "$PWD/operator-tools.sh" "./${0##*/}" "$@"
-name=$1
+reverse_dns_name=$1
 source "$PWD/region.sh"
 source "$PWD/read-secret.sh"
 source "$PWD/desec.sh"
 
 address_name=bootc-ip
-address_allocation=$(aws ec2 describe-addresses --filters "Name=tag:Name,Values=$address_name" --query 'Addresses[].AllocationId' --output text)
-[ -n "$address_allocation" ] || \
-    address_allocation=$(aws ec2 allocate-address --tag-specifications "ResourceType=elastic-ip,Tags=[{Key=Name,Value=$address_name}]" --query AllocationId --output text)
-ip=$(aws ec2 describe-addresses --allocation-ids "$address_allocation" --query 'Addresses[0].PublicIp' --output text)
+address_allocation_id=$(aws ec2 describe-addresses --filters "Name=tag:Name,Values=$address_name" --query 'Addresses[].AllocationId' --output text)
+[ -n "$address_allocation_id" ] || \
+    address_allocation_id=$(aws ec2 allocate-address --tag-specifications "ResourceType=elastic-ip,Tags=[{Key=Name,Value=$address_name}]" --query AllocationId --output text)
+address=$(aws ec2 describe-addresses --allocation-ids "$address_allocation_id" --query 'Addresses[0].PublicIp' --output text)
 
 create_desec_token reserve-address
-zone=$(fetch_zone "$name")
-subname=$(strip_zone "$name" "$zone")
-rrset=$(format_rrset "$subname" A "[\"$ip\"]")
+zone=$(fetch_zone "$reverse_dns_name")
+subname=$(strip_zone "$reverse_dns_name" "$zone")
+rrset=$(format_rrset "$subname" A "[\"$address\"]")
 write_rrsets "$zone" "[$rrset]"
 
 # A resolver that asks before the zone's nameservers publish the A record caches the earlier answer
@@ -30,28 +30,28 @@ write_rrsets "$zone" "[$rrset]"
 nameservers=$(dig +short NS "$zone")
 for nameserver in $nameservers; do
     while :; do
-        nameserver_ip=$(dig +short A "$name" "@$nameserver")
-        [ "$nameserver_ip" != "$ip" ] || break
+        nameserver_answer=$(dig +short A "$reverse_dns_name" "@$nameserver")
+        [ "$nameserver_answer" != "$address" ] || break
         sleep 5
     done
 done
 
 # AWS applies a reverse record after the call returns, and refuses it while its resolver still
 # lacks the A record, so the request repeats until the address carries the name.
-fetch_reverse_record() { aws ec2 describe-addresses-attribute --allocation-ids "$address_allocation" --attribute domain-name --query "Addresses[0].$1" --output text; }
+fetch_reverse_record() { aws ec2 describe-addresses-attribute --allocation-ids "$address_allocation_id" --attribute domain-name --query "Addresses[0].$1" --output text; }
 while :; do
     ptr_record=$(fetch_reverse_record PtrRecord)
-    [ "$ptr_record" != "$name." ] || break
-    aws ec2 modify-address-attribute --allocation-id "$address_allocation" --domain-name "$name" >/dev/null
+    [ "$ptr_record" != "$reverse_dns_name." ] || break
+    aws ec2 modify-address-attribute --allocation-id "$address_allocation_id" --domain-name "$reverse_dns_name" >/dev/null
     while :; do
         ptr_record_update_status=$(fetch_reverse_record PtrRecordUpdate.Status)
         [ "$ptr_record_update_status" = PENDING ] || break
         sleep 10
     done
     ptr_record=$(fetch_reverse_record PtrRecord)
-    if [ "$ptr_record" != "$name." ]; then
+    if [ "$ptr_record" != "$reverse_dns_name." ]; then
         fetch_reverse_record PtrRecordUpdate.Reason >&2
         sleep 30
     fi
 done
-echo "$ip carries the reverse DNS name $name." >&2
+echo "$address carries the reverse DNS name $reverse_dns_name." >&2

@@ -40,8 +40,8 @@ COPY hash-postgresql-password /hash-postgresql-password
 ENV PATH=/usr/pgsql-17/bin:/usr/local/bin:/usr/sbin:/usr/bin
 
 
-# The COPY below is the one list of the SELinux modules. The Makefile's default target compiles every
-# .te in /selinux, and the rootfs stage and setup.sh take every .pp it makes.
+# The COPY below is the one list of the SELinux modules. selinux-policy-devel's Makefile's default
+# target compiles every .te in /selinux, and the rootfs stage and setup.sh take every .pp it makes.
 FROM base AS selinux-modules
 RUN --mount=type=bind,source=rhel.repo,target=/etc/yum.repos.d/rhel.repo --mount=type=secret,id=entitlement_certificate --mount=type=secret,id=entitlement_key dnf install -y --setopt=install_weak_deps=False selinux-policy-devel
 COPY caddy/caddy.te caddy/caddy.fc postgresql/postgresql_local.te postgresql/postgresql_local.fc stalwart/stalwart.te stalwart/stalwart.fc tailscale/tailscaled.te tailscale/tailscaled.fc /selinux/
@@ -52,7 +52,7 @@ FROM base AS rootfs
 
 COPY --chown=0:0 site/ /usr/share/site/
 COPY --chown=0:0 --from=caddy-build /build/caddy /usr/bin/
-COPY --chown=0:0 sealed/boot/signed/ /usr/lib/systemd/boot/efi/
+COPY --chown=0:0 sealed/systemd-boot/signed/ /usr/lib/systemd/boot/efi/
 # The server tarball stores its binary without the executable bit.
 COPY --chown=0:0 --chmod=0755 --from=stalwart /stalwart/stalwart /stalwart/stalwart-cli-aarch64-unknown-linux-gnu/stalwart-cli /usr/bin/
 COPY --chown=0:0 --from=stalwart /stalwart/spam-filter-rules.json.gz /usr/share/stalwart/
@@ -70,7 +70,7 @@ COPY kargs.d/heap.toml      /usr/lib/bootc/kargs.d/heap.toml
 COPY kargs.d/page-shuffle.toml /usr/lib/bootc/kargs.d/page-shuffle.toml
 COPY kargs.d/panic.toml     /usr/lib/bootc/kargs.d/panic.toml
 COPY sysctl.d/kernel-restrictions.conf /usr/lib/sysctl.d/kernel-restrictions.conf
-COPY modprobe.d/unused-protocols.conf /usr/lib/modprobe.d/unused-protocols.conf
+COPY modprobe.d/unused-modules.conf /usr/lib/modprobe.d/unused-modules.conf
 COPY modules-load.d/vfat.conf /usr/lib/modules-load.d/vfat.conf
 COPY caddy/Caddyfile        /etc/caddy/Caddyfile
 COPY journald.conf          /etc/systemd/journald.conf
@@ -91,7 +91,7 @@ COPY tailscale/tailscale.repo /etc/yum.repos.d/tailscale.repo
 COPY tailscale/RPM-GPG-KEY-tailscale /etc/pki/rpm-gpg/RPM-GPG-KEY-tailscale
 COPY postgresql/pgdg.repo  /etc/yum.repos.d/pgdg.repo
 COPY postgresql/PGDG-RPM-GPG-KEY-AARCH64-RHEL /etc/pki/rpm-gpg/PGDG-RPM-GPG-KEY-AARCH64-RHEL
-COPY containers/bootc-sealed-vm.yaml /etc/containers/registries.d/bootc-sealed-vm.yaml
+COPY containers/sigstore-attachments.yaml /etc/containers/registries.d/sigstore-attachments.yaml
 COPY containers/sigpolicy.toml /usr/lib/bootc/install/sigpolicy.toml
 COPY postgresql/postgresql.conf postgresql/pg_hba.conf /etc/postgresql/
 COPY postgresql/bootstrap.sql /usr/share/boot-postgresql/
@@ -105,9 +105,9 @@ COPY tailscale/tailscaled.service /etc/systemd/system/tailscaled.service
 COPY tailscale/nftables-wireguard-port.conf /usr/lib/systemd/system/nftables.service.d/wireguard-port.conf
 COPY var/repart-var.conf     /usr/lib/systemd/system/systemd-repart.service.d/repart-var.conf
 COPY var/cryptsetup-after-repart.conf /usr/lib/systemd/system/systemd-cryptsetup@var.service.d/after-repart.conf
-COPY bootc-fetch-apply-updates-composefs.conf /usr/lib/systemd/system/bootc-fetch-apply-updates.timer.d/composefs.conf
-COPY bootc-fetch-apply-updates-composefs.conf /usr/lib/systemd/system/bootc-fetch-apply-updates.service.d/composefs.conf
-COPY bootc-fetch-apply-updates-interval.conf /usr/lib/systemd/system/bootc-fetch-apply-updates.timer.d/interval.conf
+COPY bootc-fetch-apply-updates-no-ostree-booted-condition.conf /usr/lib/systemd/system/bootc-fetch-apply-updates.timer.d/no-ostree-booted-condition.conf
+COPY bootc-fetch-apply-updates-no-ostree-booted-condition.conf /usr/lib/systemd/system/bootc-fetch-apply-updates.service.d/no-ostree-booted-condition.conf
+COPY bootc-fetch-apply-updates-hourly.conf /usr/lib/systemd/system/bootc-fetch-apply-updates.timer.d/hourly.conf
 COPY bootc-fetch-apply-updates-ecr-login.conf /usr/lib/systemd/system/bootc-fetch-apply-updates.service.d/ecr-login.conf
 
 RUN --mount=type=bind,source=rhel.repo,target=/etc/yum.repos.d/rhel.repo --mount=type=secret,id=entitlement_certificate --mount=type=secret,id=entitlement_key chmod +x /opt/scripts/* && /opt/scripts/setup.sh

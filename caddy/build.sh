@@ -23,16 +23,16 @@ hash -r
 
 # Caddy's release builds a module that requires Caddy at the tag, inside the checkout, which stamps
 # the commit into the binary. .goreleaser.yml holds these steps and flags.
-mkdir /caddy/caddy-build
-cd /caddy/caddy-build
+mkdir /caddy/release-module
+cd /caddy/release-module
 cp ../cmd/caddy/main.go .
 go mod init caddy
 go mod edit -require="github.com/caddyserver/caddy/v2@$tag"
 go mod tidy
 # The module proxy's copy of Caddy must equal the signed checkout, and the tag's go.sum must pin
 # every other module the build takes.
-module=$(go list -m -f '{{.Dir}}' github.com/caddyserver/caddy/v2)
-diff -r --exclude=.git --exclude=caddy-build /caddy "$module"
+proxy_module_directory=$(go list -m -f '{{.Dir}}' github.com/caddyserver/caddy/v2)
+diff -r --exclude=.git --exclude=release-module /caddy "$proxy_module_directory"
 unpinned=$(grep -vxFf /caddy/go.sum go.sum | grep -v "^github.com/caddyserver/caddy/v2 $tag" || true)
 [ -z "$unpinned" ]
 go build -trimpath -mod=readonly -ldflags '-s -w' -tags nobadger,nomysql,nopgx -o /build/caddy

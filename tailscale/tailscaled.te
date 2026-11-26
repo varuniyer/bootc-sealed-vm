@@ -41,8 +41,8 @@ corenet_tcp_bind_generic_node(tailscaled_t)
 corenet_udp_bind_generic_node(tailscaled_t)
 # WireGuard binds wireguard-port.env's port, which carries no port type of its own.
 corenet_udp_bind_all_ports(tailscaled_t)
-# The control plane and DERP relays answer on 443, and tailnet peers on any port. tailscale serve
-# reaches PostgreSQL on 127.0.0.1:5432 and Stalwart on 127.0.0.1:9000, 143, 587, and 25.
+# The coordination server and DERP relays answer on 443, and tailnet peers on any port. tailscale
+# serve reaches PostgreSQL on 127.0.0.1:5432 and Stalwart on 127.0.0.1:9000, 143, 587, and 25.
 corenet_tcp_connect_all_ports(tailscaled_t)
 sysnet_dns_name_resolve(tailscaled_t)
 

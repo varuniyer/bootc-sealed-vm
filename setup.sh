@@ -50,8 +50,8 @@ useradd -r -g stalwart -d /var/lib/stalwart -s /usr/sbin/nologin stalwart
 mkdir /etc/pki/containers
 
 # bootc's dracut module embeds setup-root-conf.toml in the initramfs, which applies it before the root mounts.
-KVER=$(basename /usr/lib/modules/*)
-dracut --no-hostonly --force --kver "$KVER" /usr/lib/modules/"$KVER"/initramfs.img
+kernel_version=$(basename /usr/lib/modules/*)
+dracut --no-hostonly --force --kver "$kernel_version" /usr/lib/modules/"$kernel_version"/initramfs.img
 # The UKI embeds the kernel and initramfs, so they move from /usr/lib/modules to /kernel, where
 # seal.sh's build_uki reads them.
 bootc container split-kernel-and-rootfs --rootfs / --output /kernel
