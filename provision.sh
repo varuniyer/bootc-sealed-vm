@@ -36,8 +36,8 @@ if [ -z "$vm_instance_id" ]; then
     read_secret 'PostgreSQL experiments password' POSTGRESQL_EXPERIMENTS_PASSWORD
 fi
 # A run against the existing VM reuses every value that still holds, so a rerun with unchanged
-# settings and secrets changes nothing. Parameters outlive the VM they were set for, and a new VM
-# starts without them.
+# settings and secrets changes nothing. Parameters remain when the VM they were set for is deleted,
+# and a new VM starts without them.
 existing_parameters=$(aws ssm get-parameters-by-path --path "$VM_PARAMETERS" --with-decryption --query 'Parameters[].{key: Name, value: Value}' | \
     jq -c --arg path "$VM_PARAMETERS" 'map({(.key | ltrimstr($path)): .value}) | add // {}')
 if [ -z "$vm_instance_id" ] && [ "$existing_parameters" != '{}' ]; then
@@ -96,7 +96,7 @@ existing_build_instance_ami_id=$(aws ssm get-parameters --names "${BUILD_PARAMET
 [ "$build_instance_ami_id" = "$existing_build_instance_ami_id" ] || \
     aws ssm put-parameter --name "${BUILD_PARAMETERS}build-instance-ami-id" --type String --data-type aws:ec2:image --overwrite --value "$build_instance_ami_id" >/dev/null
 
-# reserve-address.sh allocates the address, which outlives the VM and the stack, so DNS keeps
+# reserve-address.sh allocates the address, which remains after the VM and the stack, so DNS keeps
 # pointing at reprovisioned VMs and the address keeps its reverse DNS record.
 address_name=bootc-ip
 address_allocation=$(aws ec2 describe-addresses --filters "Name=tag:Name,Values=$address_name" --query 'Addresses[].AllocationId' --output text)
@@ -105,9 +105,9 @@ if [ -z "$address_allocation" ]; then
     exit 1
 fi
 
-# infrastructure.yaml holds the other AWS resources that outlive the VM, and a deploy changes only
-# the resources whose definitions changed. The VM's network interface lives in the default subnet
-# of the first zone that offers the instance type.
+# infrastructure.yaml holds the other AWS resources that remain when the VM is deleted, and a deploy
+# changes only the resources whose definitions changed. The VM's network interface lives in the
+# default subnet of the first zone that offers the instance type.
 zones=$(aws ec2 describe-instance-type-offerings --location-type availability-zone --filters "Name=instance-type,Values=$VM_INSTANCE_TYPE" --query 'InstanceTypeOfferings[].Location' --output text | tr '\t' ,)
 subnet=$(aws ec2 describe-subnets --filters Name=default-for-az,Values=true "Name=availability-zone,Values=$zones" --query 'sort_by(Subnets, &AvailabilityZone)[0].SubnetId' --output text)
 stack=bootc
@@ -342,7 +342,7 @@ else
     printf '%s' "$POSTGRESQL_EXPERIMENTS_PASSWORD" | runuser -u postgres -- /hash-postgresql-password/run.sh | tr -d '\n' | \
         aws ssm put-parameter --name "${VM_PARAMETERS}postgresql-experiments-hash" --type SecureString --value file:///dev/fd/0 >/dev/null
     # The first boot logs in with this key, and every later boot reuses the node key in tailscaled's
-    # state on /var. A tagged node's key never expires, so the auth key needs to outlive only the
+    # state on /var. A tagged node's key never expires, so the auth key needs to last only until the
     # first boot, and a non-ephemeral node stays registered while the VM reboots.
     tailscale_auth_key=$(jq -n '{capabilities: {devices: {create: {reusable: false, ephemeral: false, preauthorized: true, tags: ["tag:vm"]}}}, expirySeconds: 3600, description: "bootc-vm first boot"}' | \
         call_tailscale_api -H 'Content-Type: application/json' --data @- "$tailscale_api_base/tailnet/-/keys" | jq -er .key)

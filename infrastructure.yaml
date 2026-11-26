@@ -1,7 +1,7 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >-
-  The AWS resources that outlive the VM. provision.sh deploys this as the bootc stack and creates
-  the VM and its parameters itself, and entitlement.sh creates the build's secrets.
+  The AWS resources that remain when the VM is deleted. provision.sh deploys this as the bootc stack
+  and creates the VM and its parameters itself, and entitlement.sh creates the build's secrets.
 
 Parameters:
   Repository:
@@ -373,8 +373,8 @@ Resources:
           FromPort: !Ref WireguardPort
           ToPort: !Ref WireguardPort
           CidrIp: 0.0.0.0/0
-  # The network interface outlives the VM and holds the address that reserve-address.sh allocates, so
-  # a new VM has the address from its first packet.
+  # The network interface remains after the VM is deleted and holds the address that
+  # reserve-address.sh allocates, so a new VM has the address from its first packet.
   VmInterface:
     Type: AWS::EC2::NetworkInterface
     Properties:
