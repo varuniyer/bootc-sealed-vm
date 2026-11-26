@@ -96,8 +96,8 @@ existing_build_instance_ami_id=$(aws ssm get-parameters --names "${BUILD_PARAMET
 [ "$build_instance_ami_id" = "$existing_build_instance_ami_id" ] || \
     aws ssm put-parameter --name "${BUILD_PARAMETER_PATH}build-instance-ami-id" --type String --data-type aws:ec2:image --overwrite --value "$build_instance_ami_id" >/dev/null
 
-# reserve-address.sh allocates the address, which remains after the VM and the stack, so DNS keeps
-# pointing at reprovisioned VMs and the address keeps its reverse DNS record.
+# reserve-address.sh allocates the address, which remains after the VM and the stack, so the A
+# records keep resolving to reprovisioned VMs and the address keeps its reverse DNS record.
 address_name=bootc-ip
 address_allocation_id=$(aws ec2 describe-addresses --filters "Name=tag:Name,Values=$address_name" --query 'Addresses[].AllocationId' --output text)
 if [ -z "$address_allocation_id" ]; then
